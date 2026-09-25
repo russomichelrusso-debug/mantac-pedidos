@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Mantac Pedidos</title>
+  <meta name="description" content="Consulta de preços, catálogo técnico e orçamentos Mantac — Tabela 44 (PR).">
+  <meta name="theme-color" content="#004AFF">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/favicon-32.png" sizes="32x32">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <link rel="preload" href="fonts/inter.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+  <header class="topo">
+    <img class="topo__logo" src="img/logo-wordmark.png" alt="Mantac" width="120" height="25">
+    <span class="topo__info" id="topo-info"></span>
+  </header>
+
+  <main id="app">
+    <!-- CONSULTA -->
+    <section class="vista" id="v-consulta" data-vista="consulta">
+      <h1 class="titulo">Consulta de preços</h1>
+      <div class="busca">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+        <input id="busca" type="search" inputmode="search" autocomplete="off" placeholder="Código, descrição, bitola…" aria-label="Buscar produto">
+      </div>
+      <nav class="abas-classe" id="classes" aria-label="Filtrar por linha"></nav>
+      <p class="contagem" id="contagem"></p>
+      <ul class="lista" id="resultados"></ul>
+      <button class="btn btn--contorno btn--bloco" id="mais" hidden>Mostrar mais</button>
+    </section>
+
+    <!-- ORÇAMENTO -->
+    <section class="vista" id="v-orcamento" data-vista="orcamento" hidden>
+      <h1 class="titulo">Orçamento</h1>
+      <div class="campos">
+        <label class="campo"><span>Cliente</span><input id="cliente" type="text" autocomplete="off" placeholder="Nome do cliente"></label>
+        <label class="campo"><span>Vendedor</span><input id="vendedor" type="text" autocomplete="off"></label>
+      </div>
+      <div id="itens"></div>
+      <div id="totais"></div>
+    </section>
+
+    <!-- PAINEL -->
+    <section class="vista" id="v-painel" data-vista="painel" hidden>
+      <h1 class="titulo">Painel</h1>
+      <div id="painel"></div>
+    </section>
+  </main>
+
+  <!-- Detalhe do produto -->
+  <div class="folha" id="folha" hidden>
+    <div class="folha__fundo" data-acao="fechar"></div>
+    <article class="folha__corpo" role="dialog" aria-modal="true" aria-labelledby="det-titulo" id="detalhe"></article>
+  </div>
+
+  <nav class="abas" aria-label="Navegação">
+    <button class="aba" data-ir="consulta" aria-current="page">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+      <span>Consulta</span>
+    </button>
+    <button class="aba" data-ir="orcamento">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5M9 13h7M9 17h7"/></svg>
+      <span>Orçamento</span><b class="aba__badge" id="badge" hidden></b>
+    </button>
+    <button class="aba" data-ir="painel">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="9" cy="6" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="8" cy="18" r="2"/></svg>
+      <span>Painel</span>
+    </button>
+  </nav>
+
+  <div class="aviso" id="aviso" role="status" aria-live="polite"></div>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
