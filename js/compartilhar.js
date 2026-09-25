@@ -26,8 +26,9 @@ function rodape(orc, ds, tot, linhas) {
   const lista = ds?.fontes?.pdf?.lista ? `Tabela ${ds.fontes.pdf.lista.split(' - ')[0]}` : 'Tabela 44';
   const partes = [
     `Preços ${lista}`,
-    `Pagamento: ${orc.aVista ? 'à vista (−2%)' : '28 DD'}`,
+    `Pagamento: ${orc.condicaoTexto || '28 DD'}`,
     'Valores com IPI' + (tot.st > 0 ? ' e ICMS-ST (PR)' : ''),
+    ...(orc.recolheSt ? ['ICMS-ST recolhido pelo cliente'] : []),
   ];
   const oferta = linhas.find((x) => x.calc.emOferta);
   if (oferta && orc.ofertaValidade) partes.push(`Ofertas válidas até ${orc.ofertaValidade.split('-').reverse().join('/')}`);
@@ -38,7 +39,7 @@ function rodape(orc, ds, tot, linhas) {
 export function gerarTexto(orc, linhas, tot, ds) {
   const l = [];
   l.push(`*MANTAC* — Orçamento${orc.numero ? ' nº ' + orc.numero : ''}`);
-  if (orc.cliente) l.push(`Cliente: ${orc.cliente}${docFmt(orc.clienteDoc) ? ' · ' + docFmt(orc.clienteDoc) : ''}`);
+  if (orc.cliente) l.push(`Cliente: ${orc.clienteCodigo ? orc.clienteCodigo + ' - ' : ''}${orc.cliente}${docFmt(orc.clienteDoc) ? ' · ' + docFmt(orc.clienteDoc) : ''}`);
   l.push(`Vendedor: ${orc.vendedor}`);
   l.push(`Data: ${hoje()}`);
   l.push('');

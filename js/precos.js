@@ -3,7 +3,9 @@
 // Preço da Tabela 44 = preço unitário já com ICMS (conforme o PDF).
 // 1. Faixa: preço × fator da faixa (ou preço digitado na planilha, se houver).
 //    Produto em oferta ativa: o preço da oferta substitui o de tabela e as faixas
-//    incidem sobre ele; comissão da oferta. À vista: −2% em todos os itens.
+//    incidem sobre ele; comissão da oferta.
+//    Condição de pagamento com desconto (14 DD / à vista: −2%) em todos os itens.
+//    Cliente que recolhe a ST: ST zerada no pedido.
 // 2. IPI: sobre o valor da mercadoria, alíquota do item.
 // 3. ICMS-ST, por código, conforme a tabela "PR ST" da Mantac (MVA do item):
 //      BC-ST = (mercadoria + IPI*) × (1 + MVA)          *se "IPI na base" ligado
@@ -12,8 +14,15 @@
 
 export const r2 = (v) => Math.round(Number((v * 100).toPrecision(12))) / 100;
 
+export const CONDICOES_PADRAO = [
+  { id: '28dd', nome: '28 DD', desconto: 0 },
+  { id: '14dd', nome: '14 DD', desconto: 2 },
+  { id: 'avista', nome: 'À vista', desconto: 2 },
+];
+
 export const CONFIG_PADRAO = {
   vendedor: 'RUSSO',
+  condicoes: CONDICOES_PADRAO,
   st: {
     aliqInterna: 19.5, // ICMS interno PR (%) — usado quando a tabela de ST não traz
     aliqInter: 12, // ICMS interestadual SC → PR (%)
@@ -71,12 +80,12 @@ export function calcularItem(prod, faixas, k, qtd, cfg) {
   const faixa = faixas[k] || faixas[0];
   const promo = precoOferta(prod, cfg);
   let unit = promo != null ? r2(promo * faixa.fator) : precoUnitario(prod, faixa, k);
-  if (cfg?.aVista) unit = r2(unit * (1 - (cfg.descAVista ?? 0.02)));
+  if (cfg?.descPagamento) unit = r2(unit * (1 - cfg.descPagamento / 100));
   const comissaoPct = promo != null ? cfg.ofertas.comissao ?? faixa.comissao : faixa.comissao;
   const mercadoria = r2(unit * qtd);
   const ipi = r2(mercadoria * (prod.ipi || 0) / 100);
   let st = 0;
-  const regra = regraSt(prod, cfg);
+  const regra = cfg?.clienteRecolheSt ? null : regraSt(prod, cfg);
   if (regra) {
     const base = mercadoria + (cfg.st.ipiNaBase === false ? 0 : ipi);
     const bc = base * (1 + Number(regra.mva) / 100);
@@ -95,13 +104,21 @@ export function calcularItem(prod, faixas, k, qtd, cfg) {
     comissao: r2(mercadoria * comissaoPct),
     emOferta: promo != null,
     temSt: !!regra,
+    stDoCliente: !!cfg?.clienteRecolheSt && !!regraSt(prod, cfg),
+    peso: prod.peso != null ? prod.peso * qtd : 0,
     mva: regra ? Number(regra.mva) : null,
   };
 }
 
 export function totalizar(linhas) {
   const t = { mercadoria: 0, ipi: 0, st: 0, total: 0, comissao: 0 };
-  for (const l of linhas) for (const k of Object.keys(t)) t[k] = r2(t[k] + l.calc[k]);
+  let peso = 0;
+  for (const l of linhas) {
+    for (const k of Object.keys(t)) t[k] = r2(t[k] + l.calc[k]);
+    peso += l.calc.peso || 0;
+  }
+  t.peso = Math.round(peso * 1000) / 1000;
+  t.pm = peso ? t.mercadoria / peso : 0; // preço médio por kg (como o "P.M." do pedido Mantac)
   return t;
 }
 
