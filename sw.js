@@ -1,9 +1,10 @@
 // Gerado por tools/build-sw.mjs — não editar à mão.
-const VERSAO = 'mantac-7d4c245f88';
+const VERSAO = 'mantac-04b4d26063';
 const ARQUIVOS = [
   "./",
   "css/app.css",
   "data/catalogo.json",
+  "data/ofertas.json",
   "data/st-pr.json",
   "data/tabela44.json",
   "fonts/inter.woff2",

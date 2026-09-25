@@ -2,6 +2,8 @@
 //
 // Preço da Tabela 44 = preço unitário já com ICMS (conforme o PDF).
 // 1. Faixa: preço × fator da faixa (ou preço digitado na planilha, se houver).
+//    Produto em oferta ativa: o preço da oferta substitui o de tabela e as faixas
+//    incidem sobre ele; comissão da oferta. À vista: −2% em todos os itens.
 // 2. IPI: sobre o valor da mercadoria, alíquota do item.
 // 3. ICMS-ST, por código, conforme a tabela "PR ST" da Mantac (MVA do item):
 //      BC-ST = (mercadoria + IPI*) × (1 + MVA)          *se "IPI na base" ligado
@@ -50,10 +52,27 @@ export function situacaoSt(prod, cfg) {
   return 'indefinido';
 }
 
+/** Oferta está valendo na data (AAAA-MM-DD)? */
+export function ofertaVigente(ofertas, hoje = new Date().toISOString().slice(0, 10)) {
+  return !!ofertas?.precos && (!ofertas.inicio || hoje >= ofertas.inicio) && (!ofertas.validade || hoje <= ofertas.validade);
+}
+
+/**
+ * Preço de oferta do produto, se a oferta passada em cfg.ofertas (já vigente) o
+ * incluir e for menor que o preço de tabela (oferta nunca encarece o item).
+ */
+export function precoOferta(prod, cfg) {
+  const v = cfg?.ofertas?.precos?.[prod.codigo];
+  return v != null && v > 0 && v < prod.preco ? v : null;
+}
+
 /** Calcula um item do orçamento (ou uma simulação de 1 embalagem). */
 export function calcularItem(prod, faixas, k, qtd, cfg) {
   const faixa = faixas[k] || faixas[0];
-  const unit = precoUnitario(prod, faixa, k);
+  const promo = precoOferta(prod, cfg);
+  let unit = promo != null ? r2(promo * faixa.fator) : precoUnitario(prod, faixa, k);
+  if (cfg?.aVista) unit = r2(unit * (1 - (cfg.descAVista ?? 0.02)));
+  const comissaoPct = promo != null ? cfg.ofertas.comissao ?? faixa.comissao : faixa.comissao;
   const mercadoria = r2(unit * qtd);
   const ipi = r2(mercadoria * (prod.ipi || 0) / 100);
   let st = 0;
@@ -72,8 +91,9 @@ export function calcularItem(prod, faixas, k, qtd, cfg) {
     st,
     total,
     unitFinal: qtd ? total / qtd : 0,
-    comissaoPct: faixa.comissao,
-    comissao: r2(mercadoria * faixa.comissao),
+    comissaoPct,
+    comissao: r2(mercadoria * comissaoPct),
+    emOferta: promo != null,
     temSt: !!regra,
     mva: regra ? Number(regra.mva) : null,
   };

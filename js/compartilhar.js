@@ -13,6 +13,7 @@ const nomeArquivo = (orc, ext) => {
   return `Orcamento-Mantac-${orc.numero ? orc.numero + '-' : ''}${cli}-${new Date().toISOString().slice(0, 10)}.${ext}`;
 };
 const unidade = (p) => p.um || 'un';
+const descItem = (x) => x.prod.descricao + (x.calc.emOferta ? ' (oferta)' : '');
 const titulo = (orc) => (orc.numero ? `ORÇAMENTO Nº ${orc.numero}` : 'ORÇAMENTO');
 function docFmt(v) {
   const d = String(v ?? '').replace(/\D/g, '');
@@ -21,9 +22,15 @@ function docFmt(v) {
   return '';
 }
 
-function rodape(ds, temSt) {
+function rodape(orc, ds, tot, linhas) {
   const lista = ds?.fontes?.pdf?.lista ? `Tabela ${ds.fontes.pdf.lista.split(' - ')[0]}` : 'Tabela 44';
-  const partes = [`Preços ${lista}`, 'Condição de pagamento: 28 DD', 'Valores com IPI' + (temSt ? ' e ICMS-ST (PR)' : '')];
+  const partes = [
+    `Preços ${lista}`,
+    `Pagamento: ${orc.aVista ? 'à vista (−2%)' : '28 DD'}`,
+    'Valores com IPI' + (tot.st > 0 ? ' e ICMS-ST (PR)' : ''),
+  ];
+  const oferta = linhas.find((x) => x.calc.emOferta);
+  if (oferta && orc.ofertaValidade) partes.push(`Ofertas válidas até ${orc.ofertaValidade.split('-').reverse().join('/')}`);
   return partes.join(' · ');
 }
 
@@ -37,7 +44,7 @@ export function gerarTexto(orc, linhas, tot, ds) {
   l.push('');
   linhas.forEach((x, i) => {
     const c = x.calc;
-    l.push(`${i + 1}) ${x.prod.codigo} · ${x.prod.descricao}`);
+    l.push(`${i + 1}) ${x.prod.codigo} · ${descItem(x)}`);
     l.push(`   ${numero(x.qtd)} ${unidade(x.prod)} × ${brl(c.unit)} = ${brl(c.mercadoria)}`);
     const imp = [`IPI ${pct((x.prod.ipi || 0) / 100)}: ${brl(c.ipi)}`];
     if (c.st) imp.push(`ST: ${brl(c.st)}`);
@@ -49,7 +56,7 @@ export function gerarTexto(orc, linhas, tot, ds) {
   if (tot.st) l.push(`ICMS-ST: ${brl(tot.st)}`);
   l.push(`*TOTAL: ${brl(tot.total)}*`);
   l.push('');
-  l.push(`_${rodape(ds, tot.st > 0)}_`);
+  l.push(`_${rodape(orc, ds, tot, linhas)}_`);
   return l.join('\n');
 }
 
@@ -86,7 +93,7 @@ export async function gerarImagem(orc, linhas, tot, ds) {
 
   // Pré-calcula a altura.
   medir.font = `600 28px ${F}`;
-  const blocos = linhas.map((x) => quebrar(medir, `${x.prod.codigo} · ${x.prod.descricao}`, W - 2 * M));
+  const blocos = linhas.map((x) => quebrar(medir, `${x.prod.codigo} · ${descItem(x)}`, W - 2 * M));
   const altItens = blocos.reduce((s, b) => s + b.length * 36 + 88, 0);
   const H = 300 + altItens + 260 + (tot.st ? 44 : 0) + (docFmt(orc.clienteDoc) ? 30 : 0);
 
@@ -174,7 +181,7 @@ export async function gerarImagem(orc, linhas, tot, ds) {
   linhaTot('TOTAL', brl(tot.total), true);
   ctx.fillStyle = CORPO;
   ctx.font = `400 20px ${F}`;
-  ctx.fillText(rodape(ds, tot.st > 0), M, H - 36, W - 2 * M);
+  ctx.fillText(rodape(orc, ds, tot, linhas), M, H - 36, W - 2 * M);
 
   const blob = await new Promise((ok) => cv.toBlob(ok, 'image/png'));
   return { blob, nome: nomeArquivo(orc, 'png') };
@@ -245,7 +252,7 @@ export async function gerarPdf(orc, linhas, tot, ds) {
   const head = ['Código', 'Descrição', 'Qtd', 'Un', 'Unit.', 'IPI', ...(temSt ? ['ST'] : []), 'Total'];
   const body = linhas.map((x) => [
     x.prod.codigo,
-    ansi(x.prod.descricao),
+    ansi(descItem(x)),
     numero(x.qtd),
     unidade(x.prod),
     brl(x.calc.unit),
@@ -296,7 +303,7 @@ export async function gerarPdf(orc, linhas, tot, ds) {
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(8);
   doc.setTextColor(CORPO);
-  doc.text(ansi(rodape(ds, temSt)), M, doc.internal.pageSize.getHeight() - 10);
+  doc.text(ansi(rodape(orc, ds, tot, linhas)), M, doc.internal.pageSize.getHeight() - 10, { maxWidth: W - 2 * M });
   return { blob: doc.output('blob'), nome: nomeArquivo(orc, 'pdf') };
 }
 

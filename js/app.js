@@ -1,5 +1,5 @@
 import * as db from './db.js';
-import { CONFIG_PADRAO, calcularItem, totalizar, multiploEmb, situacaoSt, regraSt, brl, numero, pct } from './precos.js';
+import { CONFIG_PADRAO, calcularItem, totalizar, multiploEmb, situacaoSt, regraSt, ofertaVigente, precoOferta, brl, numero, pct } from './precos.js';
 import { aplicarPdf, aplicarXls, comparar } from './dados.js';
 import { gerarTexto, gerarImagem, gerarPdf, compartilharArquivo, compartilharTexto } from './compartilhar.js';
 
@@ -29,11 +29,13 @@ const ICONES = {
   editar: '<svg viewBox="0 0 24 24"><path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5z"/></svg>',
 };
 
-const orcVazio = (cfg) => ({ id: null, numero: null, clienteId: null, cliente: '', clienteDoc: '', vendedor: cfg.vendedor, faixaPadrao: 0, itens: [] });
+const orcVazio = (cfg) => ({ id: null, numero: null, clienteId: null, cliente: '', clienteDoc: '', vendedor: cfg.vendedor, faixaPadrao: 0, aVista: false, itens: [] });
 
 const estado = {
   ds: null,
   st: null, // tabela de ICMS-ST por código ({ arquivo, porCodigo, origem })
+  ofertas: null, // { nome, inicio, validade, comissao, precos: {codigo: preço}, origem }
+  soOfertas: false,
   cat: { linhas: [], itens: {} },
   cfg: structuredClone(CONFIG_PADRAO),
   orc: null,
@@ -48,10 +50,18 @@ const estado = {
 };
 let indice = [];
 // Configuração de cálculo: preferências salvas + tabela de ST por código.
-const ctx = () => ({ ...estado.cfg, tabelaSt: estado.st });
+const ofertasAtivas = () => (ofertaVigente(estado.ofertas) ? estado.ofertas : null);
+const ctx = () => ({ ...estado.cfg, tabelaSt: estado.st, ofertas: ofertasAtivas(), aVista: !!estado.orc?.aVista });
+const dataCurta = (iso) => (iso ? iso.slice(8, 10) + '/' + iso.slice(5, 7) : '');
 let porCodigo = new Map();
 
 // ---------- Carga ----------
+async function carregarOfertasEmbutidas() {
+  const o = await (await fetch('data/ofertas.json', { cache: 'no-cache' })).json();
+  o.origem = 'embutido';
+  return o;
+}
+
 async function carregarStEmbutido() {
   const st = await (await fetch('data/st-pr.json', { cache: 'no-cache' })).json();
   st.origem = 'embutido';
@@ -65,7 +75,7 @@ async function carregarEmbutido() {
 }
 
 async function iniciar() {
-  const [cfg, orc, ds, clientes, historico, seq, st] = await Promise.all(['cfg', 'orc', 'ds', 'clientes', 'historico', 'seq', 'st'].map((k) => db.ler(k).catch(() => undefined)));
+  const [cfg, orc, ds, clientes, historico, seq, st, ofertas] = await Promise.all(['cfg', 'orc', 'ds', 'clientes', 'historico', 'seq', 'st', 'ofertas'].map((k) => db.ler(k).catch(() => undefined)));
   if (cfg) estado.cfg = { ...structuredClone(CONFIG_PADRAO), ...cfg, st: { ...CONFIG_PADRAO.st, ...cfg.st } };
   estado.orc = { ...orcVazio(estado.cfg), ...(orc || {}) };
   estado.clientes = clientes || [];
@@ -79,6 +89,8 @@ async function iniciar() {
       estado.ds = ds;
     }
   }
+  if (ofertas && ofertas.origem === 'upload') estado.ofertas = ofertas;
+  else estado.ofertas = await carregarOfertasEmbutidas().catch(() => ofertas || null);
   if (st && st.origem === 'upload') estado.st = st;
   else {
     try {
@@ -226,16 +238,31 @@ function renderFaixaPadrao() {
     .join('');
 }
 
+function renderOfertasChip() {
+  const o = ofertasAtivas();
+  const el = $('#ofertas-chip');
+  el.hidden = !o;
+  if (!o) {
+    estado.soOfertas = false;
+    return;
+  }
+  const n = estado.ds.produtos.filter((p) => precoOferta(p, ctx())).length;
+  el.setAttribute('aria-pressed', estado.soOfertas);
+  el.innerHTML = `<b>${esc(o.nome || 'Ofertas')}</b> · ${n} produtos · até ${dataCurta(o.validade)}`;
+}
+
 function renderPedido() {
   $('#busca').value = estado.busca;
   renderClienteCard();
   renderFaixaPadrao();
+  renderOfertasChip();
   renderResultados();
 }
 
 function filtrar() {
   const termos = norm(estado.busca).split(/\s+/).filter(Boolean);
-  let r = indice.filter((x) => termos.every((t) => x.chave.includes(t)));
+  const c = ctx();
+  let r = indice.filter((x) => (!estado.soOfertas || precoOferta(x.p, c)) && termos.every((t) => x.chave.includes(t)));
   if (termos.length === 1) {
     const t = termos[0];
     const cod = (x) => norm(x.p.codigo);
@@ -250,12 +277,13 @@ function cardProduto(p) {
   const k = estado.orc.faixaPadrao;
   const f = estado.ds.faixas[k];
   const c = calcularItem(p, estado.ds.faixas, k, 1, ctx());
-  const tabela = calcularItem(p, estado.ds.faixas, 0, 1, ctx());
+  const tabela = { unit: p.preco };
   const noOrc = estado.orc.itens.find((i) => i.codigo === p.codigo);
   const tec = estado.cat.itens?.[p.codigo];
   return `<div class="card" data-card="${esc(p.codigo)}">
     <div class="card__topo">
       <span class="selo">${esc(p.classe || p.tipo || 'Produto')}</span>
+      ${c.emOferta ? `<span class="selo selo--oferta">Oferta até ${dataCurta(ofertasAtivas().validade)}</span>` : ''}
       ${c.temSt ? '<span class="selo selo--st">ST</span>' : ''}
       ${noOrc ? `<span class="selo selo--ok">No orçamento · ${numero(noOrc.qtd)} ${esc(p.um)}</span>` : ''}
     </div>
@@ -268,7 +296,7 @@ function cardProduto(p) {
         <button class="btn-icone" data-pend="${esc(p.codigo)}" data-d="1" aria-label="Aumentar">${ICONES.mais}</button>
       </div>
       <div class="card__preco">
-        ${k > 0 ? `<span class="de">de <s>${brl(tabela.unit)}</s></span>` : ''}
+        ${c.unit < tabela.unit - 0.004 ? `<span class="de">tabela <s>${brl(tabela.unit)}</s></span>` : ''}
         <b>${brl(c.unit)}<small>/${esc(p.um)}</small></b>
         <span>c/ imp. ${brl(c.unitFinal)} · ${esc(f.nome)}</span>
       </div>
@@ -279,14 +307,14 @@ function cardProduto(p) {
 
 function renderResultados() {
   const q = estado.busca.trim();
-  if (q.length < 2) {
+  if (q.length < 2 && !estado.soOfertas) {
     $('#contagem').textContent = 'Digite ao menos 2 caracteres para buscar.';
     $('#resultados').innerHTML = '';
     $('#mais').hidden = true;
     return;
   }
   const r = filtrar();
-  $('#contagem').textContent = `${r.length} produto${r.length === 1 ? '' : 's'} encontrado${r.length === 1 ? '' : 's'}`;
+  $('#contagem').textContent = `${r.length} produto${r.length === 1 ? '' : 's'} ${estado.soOfertas ? 'em oferta' : 'encontrado' + (r.length === 1 ? '' : 's')}`;
   $('#resultados').innerHTML = r.length
     ? r.slice(0, estado.limite).map(cardProduto).join('')
     : `<div class="vazio"><b>Nada encontrado</b>Nenhum produto para “${esc(q)}”.</div>`;
@@ -359,7 +387,7 @@ function renderOrcamento() {
         <span class="num">${i + 1}</span>
         <button class="item__abrir" data-abrir="${esc(x.prod.codigo)}">
           <span class="item__desc">${esc(x.prod.descricao)}</span>
-          <span class="item__meta">Cód. ${esc(x.prod.codigo)} · múltiplos de ${numero(x.prod.emb)} ${esc(x.prod.um)}${x.calc.temSt ? ' · <b class="st">ST</b>' : ''}</span>
+          <span class="item__meta">Cód. ${esc(x.prod.codigo)} · múltiplos de ${numero(x.prod.emb)} ${esc(x.prod.um)}${x.calc.emOferta ? ' · <b class="of">OFERTA</b>' : ''}${x.calc.temSt ? ' · <b class="st">ST</b>' : ''}</span>
         </button>
         <button class="btn-icone btn-icone--sem-borda" data-remover="${esc(x.prod.codigo)}" aria-label="Remover ${esc(x.prod.codigo)}">${ICONES.x}</button>
       </div>
@@ -382,6 +410,7 @@ function renderOrcamento() {
     </div>`
       )
       .join('')}
+    ${linhas.length ? `<label class="check check--caixa"><input type="checkbox" data-a-vista ${o.aVista ? 'checked' : ''}> <span><b>Pagamento à vista (−2%)</b><br><small class="mudo">Desconto de 2% em todos os itens; condição “à vista” no orçamento. Sem marcar: 28 DD.</small></span></label>` : ''}
     ${linhas.length ? `<div class="totais">
       <dl>
         <dt>Total s/ impostos</dt><dd>${brl(t.mercadoria)}</dd>
@@ -423,9 +452,10 @@ function salvarNoHistorico() {
     clienteDoc: o.clienteDoc,
     vendedor: o.vendedor,
     faixaPadrao: o.faixaPadrao,
+    aVista: !!o.aVista,
     itens: o.itens.map((i) => ({ ...i })),
     // Retrato dos valores no momento em que foi salvo (a tabela pode mudar depois).
-    retrato: linhas.map((x) => ({ codigo: x.prod.codigo, descricao: x.prod.descricao, um: x.prod.um, qtd: x.qtd, faixa: estado.ds.faixas[x.k]?.nome, unit: x.calc.unit, total: x.calc.total })),
+    retrato: linhas.map((x) => ({ codigo: x.prod.codigo, descricao: x.prod.descricao, um: x.prod.um, qtd: x.qtd, faixa: (x.calc.emOferta ? 'Oferta · ' : '') + (estado.ds.faixas[x.k]?.nome || ''), unit: x.calc.unit, total: x.calc.total })),
     total: t.total,
     mercadoria: t.mercadoria,
     tabela: estado.ds.fontes?.pdf?.dataRef || null,
@@ -444,7 +474,7 @@ async function exportar(tipo) {
   salvarNoHistorico();
   renderOrcamento();
   const tot = totalizar(linhas);
-  const orc = { ...estado.orc, vendedor: estado.orc.vendedor || estado.cfg.vendedor };
+  const orc = { ...estado.orc, vendedor: estado.orc.vendedor || estado.cfg.vendedor, ofertaValidade: ofertasAtivas()?.validade };
   try {
     if (tipo === 'texto') {
       const r = await compartilharTexto(gerarTexto(orc, linhas, tot, estado.ds));
@@ -494,7 +524,7 @@ function abrirDetalhe(codigo) {
   const linhasFaixa = faixas
     .map((f, k) => {
       const c = calcularItem(p, faixas, k, 1, ctx());
-      return `<tr><td><b>${esc(f.nome)}</b></td><td>${brl(c.unit)}</td><td><b>${brl(c.unitFinal)}</b></td><td class="com">${pct(f.comissao)}</td></tr>`;
+      return `<tr><td><b>${esc(f.nome)}</b></td><td>${brl(c.unit)}</td><td><b>${brl(c.unitFinal)}</b></td><td class="com">${pct(c.comissaoPct)}</td></tr>`;
     })
     .join('');
   let tecnico = '';
@@ -531,7 +561,8 @@ function abrirDetalhe(codigo) {
       <thead><tr><th>Faixa</th><th>Unit.</th><th>C/ impostos</th><th>Comissão</th></tr></thead>
       <tbody>${linhasFaixa}</tbody>
     </table>
-    <p class="mudo" style="font-size:13px;margin:8px 0 0">C/ impostos = unitário + IPI ${pct(p.ipi / 100)}${c0.temSt ? ' + ICMS-ST' : ''}. Preço de tabela já inclui ICMS.</p>
+    ${c0.emOferta ? `<p class="aviso-oferta"><b>${esc(ofertasAtivas().nome)}:</b> ${brl(precoOferta(p, ctx()))}/${esc(p.um)} até ${dataBR(ofertasAtivas().validade)} (tabela ${brl(p.preco)}). As faixas incidem sobre o preço da oferta; comissão ${pct(c0.comissaoPct)}.</p>` : ''}
+    <p class="mudo" style="font-size:13px;margin:8px 0 0">C/ impostos = unitário + IPI ${pct(p.ipi / 100)}${c0.temSt ? ' + ICMS-ST' : ''}${estado.orc.aVista ? ' · já com −2% à vista' : ''}. Preço de tabela já inclui ICMS.</p>
     <h3 class="subtitulo">Dados comerciais</h3>
     <dl class="dados">
       <div><dt>Unidade</dt><dd>${esc(p.um)}</dd></div>
@@ -542,7 +573,7 @@ function abrirDetalhe(codigo) {
       <div><dt>ICMS-ST</dt><dd>${textoSt(p)}</dd></div>
       ${regraSt(p, ctx())?.cest ? `<div><dt>CEST</dt><dd>${esc(regraSt(p, ctx()).cest)}</dd></div>` : ''}
       <div><dt>Vigência</dt><dd>${dataBR(p.vigencia)}</dd></div>
-      <div><dt>Pagamento</dt><dd>28 DD</dd></div>
+      <div><dt>Pagamento</dt><dd>${estado.orc.aVista ? 'À vista (−2%)' : '28 DD'}</dd></div>
     </dl>
     ${tecnico}`);
 }
@@ -739,6 +770,7 @@ async function carregarDoHistorico(id, duplicar) {
     clienteDoc: h.clienteDoc,
     vendedor: duplicar ? estado.cfg.vendedor : h.vendedor,
     faixaPadrao: h.faixaPadrao ?? 0,
+    aVista: duplicar ? false : !!h.aVista,
     itens,
   };
   salvarOrc();
@@ -823,6 +855,32 @@ function renderPainel() {
     </div>
 
     <div class="cartao">
+      <h3>Ofertas</h3>
+      ${estado.ofertas ? `<p><b>${esc(estado.ofertas.nome)}</b> · ${Object.keys(estado.ofertas.precos || {}).length} códigos · ${dataBR(estado.ofertas.inicio)} a ${dataBR(estado.ofertas.validade)} · comissão ${pct(estado.ofertas.comissao ?? 0)}<br>
+        <span class="${ofertasAtivas() ? '' : 'mudo'}">${ofertasAtivas() ? 'Valendo agora.' : 'Fora do período — os preços de tabela voltam automaticamente.'}</span>
+        ${estado.ofertas.origem === 'upload' ? ' · editada neste aparelho' : ''}</p>` : '<p>Nenhuma oferta cadastrada.</p>'}
+      <details class="detalhes detalhes--neutro">
+        <summary>Editar / cadastrar ofertas</summary>
+        <form id="form-ofertas" class="form" style="margin-top:12px">
+          <label class="campo"><span>Nome da campanha</span><input name="nome" value="${esc(estado.ofertas?.nome || '')}" placeholder="Outubro de Ofertas"></label>
+          <div class="grade2">
+            <label class="campo"><span>Início</span><input type="date" name="inicio" value="${esc(estado.ofertas?.inicio || '')}"></label>
+            <label class="campo"><span>Validade</span><input type="date" name="validade" value="${esc(estado.ofertas?.validade || '')}" required></label>
+          </div>
+          <label class="campo"><span>Comissão na oferta (%)</span><input type="number" step="0.5" name="comissao" value="${Math.round((estado.ofertas?.comissao ?? 0.08) * 1000) / 10}"></label>
+          <label class="campo"><span>Preços (um por linha: código preço)</span>
+            <textarea name="precos" rows="8" style="font-family:ui-monospace,monospace;font-size:14px">${esc(Object.entries(estado.ofertas?.precos || {}).map(([c, v]) => `${c} ${String(v).replace('.', ',')}`).join('\n'))}</textarea>
+            <small>Preço líquido por unidade (m, pç, kg), como no folheto. Ex.: <code>3773 3,19</code></small>
+          </label>
+          <div class="botoes">
+            <button class="btn" type="submit">Salvar ofertas</button>
+            ${estado.ofertas?.origem === 'upload' ? '<button class="btn btn--contorno" type="button" data-acao="restaurar-ofertas">Voltar às ofertas publicadas</button>' : ''}
+          </div>
+        </form>
+      </details>
+    </div>
+
+    <div class="cartao">
       <h3>Vendedor</h3>
       <label class="campo"><span>Nome no orçamento</span><input type="text" data-cfg="vendedor" value="${esc(estado.cfg.vendedor)}"></label>
     </div>
@@ -888,6 +946,36 @@ async function lerArquivo(file) {
   renderPainel();
 }
 
+async function salvarOfertas(form) {
+  const f = Object.fromEntries(new FormData(form));
+  const precos = {};
+  const invalidos = [];
+  for (const linha of f.precos.split(/\n+/)) {
+    const m = /^\s*([0-9][0-9A-Za-z.-]*)\s*[;:\t ]\s*R?\$?\s*([\d.,]+)\s*$/.exec(linha);
+    if (!linha.trim()) continue;
+    if (!m) {
+      invalidos.push(linha.trim());
+      continue;
+    }
+    const cod = m[1].replace(/\.(?=\d{3}$)/, ''); // "27.605" -> "27605"
+    const v = Number(m[2].replace(/\.(?=\d{3}(,|$))/g, '').replace(',', '.'));
+    if (!porCodigo.has(cod) || !(v > 0)) invalidos.push(linha.trim());
+    else precos[cod] = v;
+  }
+  if (invalidos.length && !(await confirmar(`${invalidos.length} linha(s) ignorada(s) (código inexistente ou preço inválido): ${invalidos.slice(0, 5).join(' | ')}${invalidos.length > 5 ? '…' : ''}. Salvar o resto?`, 'Salvar'))) return;
+  estado.ofertas = {
+    nome: f.nome.trim() || 'Ofertas',
+    inicio: f.inicio || null,
+    validade: f.validade,
+    comissao: (Number(f.comissao) || 0) / 100,
+    precos,
+    origem: 'upload',
+  };
+  await db.gravar('ofertas', estado.ofertas);
+  renderPainel();
+  aviso(`${Object.keys(precos).length} ofertas salvas`);
+}
+
 function exportarBackup() {
   const dados = { app: 'mantac-pedidos', versao: 1, em: new Date().toISOString(), cfg: estado.cfg, clientes: estado.clientes, historico: estado.historico, seq: estado.seq };
   const blob = new Blob([JSON.stringify(dados)], { type: 'application/json' });
@@ -942,11 +1030,15 @@ function ligarEventos() {
       e.preventDefault();
       salvarCliente(e.target);
     }
+    if (e.target.id === 'form-ofertas') {
+      e.preventDefault();
+      salvarOfertas(e.target);
+    }
   });
 
   document.addEventListener('click', async (e) => {
     const el = e.target.closest(
-      '[data-ir],[data-acao],[data-abrir],[data-add],[data-pend],[data-faixa-padrao],[data-faixa-item],[data-passo],[data-remover],[data-exportar],[data-escolher],[data-editar-cliente],[data-orcar],[data-excluir-cliente],[data-ver-orc],[data-reabrir],[data-duplicar],[data-excluir-orc],[data-historico-cliente]'
+      '#ofertas-chip,[data-ir],[data-acao],[data-abrir],[data-add],[data-pend],[data-faixa-padrao],[data-faixa-item],[data-passo],[data-remover],[data-exportar],[data-escolher],[data-editar-cliente],[data-orcar],[data-excluir-cliente],[data-ver-orc],[data-reabrir],[data-duplicar],[data-excluir-orc],[data-historico-cliente]'
     );
     if (!el) return;
     const d = el.dataset;
@@ -967,6 +1059,12 @@ function ligarEventos() {
       const p = porCodigo.get(d.pend);
       estado.pend[p.codigo] = Math.max(p.emb, qtdPendente(p) + Number(d.d) * p.emb);
       return atualizarCard(p.codigo);
+    }
+    if (el.id === 'ofertas-chip') {
+      estado.soOfertas = !estado.soOfertas;
+      estado.limite = 30;
+      renderOfertasChip();
+      return renderResultados();
     }
     if (d.faixaPadrao !== undefined) {
       estado.orc.faixaPadrao = Number(d.faixaPadrao);
@@ -1086,6 +1184,12 @@ function ligarEventos() {
         await db.apagar('st');
         renderPainel();
         return aviso('Tabela de ST publicada restaurada');
+      case 'restaurar-ofertas':
+        if (!(await confirmar('Descartar as ofertas editadas neste aparelho e voltar às publicadas?', 'Restaurar', true))) return;
+        estado.ofertas = await carregarOfertasEmbutidas();
+        await db.apagar('ofertas');
+        renderPainel();
+        return aviso('Ofertas publicadas restauradas');
       case 'exportar-backup':
         return exportarBackup();
     }
@@ -1109,6 +1213,13 @@ function ligarEventos() {
       salvarOrc();
       renderBarra();
       return renderOrcamento();
+    }
+    if (el.dataset.aVista !== undefined) {
+      estado.orc.aVista = el.checked;
+      salvarOrc();
+      renderBarra();
+      renderOrcamento();
+      return aviso(el.checked ? 'À vista: −2% aplicado' : 'Condição 28 DD');
     }
     if (el.id === 'arquivo' && el.files[0]) return lerArquivo(el.files[0]);
     if (el.id === 'arquivo-backup' && el.files[0]) return importarBackup(el.files[0]);
