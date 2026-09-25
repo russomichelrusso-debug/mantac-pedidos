@@ -2,3 +2,6 @@ node_modules/
 tools/fontes/
 *.log
 .DS_Store
+data/tabela44.json
+data/st-pr.json
+data/ofertas.json

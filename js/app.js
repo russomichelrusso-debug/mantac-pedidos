@@ -1,4 +1,5 @@
 import * as db from './db.js';
+import * as api from './api.js';
 import { CONFIG_PADRAO, CONDICOES_PADRAO, calcularItem, totalizar, multiploEmb, situacaoSt, regraSt, ofertaVigente, precoOferta, brl, numero, pct } from './precos.js';
 import { aplicarPdf, aplicarXls, comparar } from './dados.js';
 import { gerarTexto, gerarImagem, gerarPdf, compartilharArquivo, compartilharTexto } from './compartilhar.js';
@@ -46,6 +47,10 @@ const estado = {
   limite: 30,
   pend: {}, // quantidade escolhida no card antes de adicionar
   previa: null,
+  fila: [], // alterações ainda não enviadas ao servidor: { rec, id, dados|null }
+  ultimoSync: null,
+  erroSync: '',
+  usuarios: null, // lista (admin)
   previaPedidos: null,
   vista: 'pedido',
 };
@@ -66,26 +71,9 @@ const dataCurta = (iso) => (iso ? iso.slice(8, 10) + '/' + iso.slice(5, 7) : '')
 let porCodigo = new Map();
 
 // ---------- Carga ----------
-async function carregarOfertasEmbutidas() {
-  const o = await (await fetch('data/ofertas.json', { cache: 'no-cache' })).json();
-  o.origem = 'embutido';
-  return o;
-}
-
-async function carregarStEmbutido() {
-  const st = await (await fetch('data/st-pr.json', { cache: 'no-cache' })).json();
-  st.origem = 'embutido';
-  return st;
-}
-
-async function carregarEmbutido() {
-  const ds = await (await fetch('data/tabela44.json', { cache: 'no-cache' })).json();
-  ds.origem = 'embutido';
-  return ds;
-}
-
 async function iniciar() {
-  const [cfg, orc, ds, clientes, historico, seq, st, ofertas] = await Promise.all(['cfg', 'orc', 'ds', 'clientes', 'historico', 'seq', 'st', 'ofertas'].map((k) => db.ler(k).catch(() => undefined)));
+  const chaves = ['cfg', 'orc', 'ds', 'clientes', 'historico', 'seq', 'st', 'ofertas', 'fila'];
+  const [cfg, orc, ds, clientes, historico, seq, st, ofertas, fila] = await Promise.all(chaves.map((k) => db.ler(k).catch(() => undefined)));
   if (cfg) estado.cfg = { ...structuredClone(CONFIG_PADRAO), ...cfg, st: { ...CONFIG_PADRAO.st, ...cfg.st } };
   estado.orc = { ...orcVazio(estado.cfg), ...(orc || {}) };
   if (estado.orc.aVista) estado.orc.condicao = 'avista';
@@ -93,32 +81,213 @@ async function iniciar() {
   estado.clientes = clientes || [];
   estado.historico = historico || [];
   estado.seq = seq || 0;
-  if (ds && ds.origem === 'upload') estado.ds = ds;
-  else {
-    try {
-      estado.ds = await carregarEmbutido();
-    } catch {
-      estado.ds = ds;
-    }
-  }
-  if (ofertas && ofertas.origem === 'upload') estado.ofertas = ofertas;
-  else estado.ofertas = await carregarOfertasEmbutidas().catch(() => ofertas || null);
-  if (st && st.origem === 'upload') estado.st = st;
-  else {
-    try {
-      estado.st = await carregarStEmbutido();
-    } catch {
-      estado.st = st || null;
-    }
-  }
+  estado.fila = fila || [];
+  // Tabela, ST e ofertas vêm do servidor (cópia local para funcionar offline).
+  estado.ds = ds?.produtos ? ds : null;
+  estado.st = st || null;
+  estado.ofertas = ofertas || null;
   try {
     estado.cat = await (await fetch('data/catalogo.json')).json();
   } catch { /* catálogo técnico é opcional */ }
-  indexar();
   ligarEventos();
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+  if (!api.token()) return mostrarLogin();
+  await abrirApp();
+}
+
+let appAberto = false;
+async function abrirApp() {
+  esconderLogin();
+  if (!estado.ds) {
+    mostrarCarregando('Baixando a tabela de preços…');
+    await sincronizar();
+    if (!estado.ds) return mostrarLogin(estado.erroSync || 'Não foi possível baixar a tabela. É preciso internet no primeiro acesso.', true);
+    esconderLogin();
+  }
+  indexar();
   renderTopo();
   irPara(location.hash.slice(1) || 'pedido', false);
-  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+  if (!appAberto) {
+    appAberto = true;
+    setInterval(sincronizar, 60000);
+    window.addEventListener('online', sincronizar);
+    document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && sincronizar());
+  }
+  sincronizar();
+}
+
+// ---------- Login ----------
+function mostrarCarregando(msg) {
+  $('#login').hidden = false;
+  $('#login-msg').textContent = msg;
+  $('#login-msg').className = 'login__msg';
+  $('#login-google').hidden = true;
+  $('#login-tentar').hidden = true;
+}
+
+function mostrarLogin(msg = '', soTentarDeNovo = false) {
+  $('#login').hidden = false;
+  $('#login-msg').textContent = msg;
+  $('#login-msg').className = 'login__msg' + (msg ? ' login__msg--erro' : '');
+  $('#login-tentar').hidden = !soTentarDeNovo;
+  $('#login-google').hidden = soTentarDeNovo;
+  if (soTentarDeNovo) return;
+  api
+    .botaoGoogle(
+      $('#login-google'),
+      async (u) => {
+        estado.cfg.vendedor = u.vendedor || estado.cfg.vendedor;
+        salvarCfgLocal();
+        await abrirApp();
+        aviso(`Bem-vindo, ${u.nome || u.email}`);
+      },
+      (e) => {
+        $('#login-msg').textContent = e.message;
+        $('#login-msg').className = 'login__msg login__msg--erro';
+      }
+    )
+    .catch((e) => {
+      $('#login-msg').textContent = (msg ? msg + ' ' : '') + e.message;
+      $('#login-msg').className = 'login__msg login__msg--erro';
+      $('#login-tentar').hidden = false;
+    });
+}
+
+function esconderLogin() {
+  $('#login').hidden = true;
+}
+
+// ---------- Sincronização ----------
+function aplicarDado(chave, valor) {
+  if (!valor) return;
+  if (chave === 'tabela44') {
+    estado.ds = { ...valor, origem: 'servidor' };
+    db.gravar('ds', estado.ds).catch(() => {});
+    if (appAberto) indexar();
+  } else if (chave === 'st') {
+    estado.st = { ...valor, origem: 'servidor' };
+    db.gravar('st', estado.st).catch(() => {});
+  } else if (chave === 'ofertas') {
+    estado.ofertas = { ...valor, origem: 'servidor' };
+    db.gravar('ofertas', estado.ofertas).catch(() => {});
+  } else if (chave === 'config') {
+    if (valor.condicoes) estado.cfg.condicoes = valor.condicoes;
+    if (valor.st) estado.cfg.st = { ...CONFIG_PADRAO.st, ...valor.st };
+    salvarCfgLocal();
+  }
+}
+
+function enfileirar(rec, id, dados, enviar = true) {
+  estado.fila = estado.fila.filter((f) => !(f.rec === rec && f.id === id));
+  estado.fila.push({ rec, id, dados: dados ? structuredClone(dados) : null });
+  db.gravar('fila', estado.fila).catch(() => {});
+  if (enviar) enviarFila();
+}
+
+let enviando = null;
+function enviarFila() {
+  if (enviando) return enviando;
+  enviando = (async () => {
+    while (estado.fila.length && api.token()) {
+      const f = estado.fila[0];
+      try {
+        const caminho = `/${f.rec}/${encodeURIComponent(f.id)}`;
+        if (f.dados) await api.chamar('PUT', caminho, { dados: f.dados });
+        else await api.chamar('DELETE', caminho);
+      } catch (e) {
+        if (e instanceof api.ErroRede) break;
+        if (e instanceof api.ErroSessao) {
+          sessaoExpirada(e.message);
+          break;
+        }
+        console.error(e);
+        aviso('Não foi possível enviar uma alteração: ' + e.message);
+      }
+      estado.fila = estado.fila.filter((x) => x !== f);
+      await db.gravar('fila', estado.fila).catch(() => {});
+    }
+  })().finally(() => {
+    enviando = null;
+    if (estado.vista === 'painel') renderStatusSync();
+  });
+  return enviando;
+}
+
+function sessaoExpirada(msg) {
+  api.guardarSessao(null, null);
+  mostrarLogin(msg);
+}
+
+let sincronizando = false;
+async function sincronizar() {
+  if (sincronizando || !api.token()) return;
+  sincronizando = true;
+  try {
+    await enviarFila();
+    const desde = await db.ler('syncDesde').catch(() => null);
+    const r = await api.chamar('GET', '/sync' + (desde ? `?desde=${encodeURIComponent(desde)}` : ''), null, { timeout: 45000 });
+    const pendentes = new Set(estado.fila.map((f) => f.rec + ':' + f.id));
+    let mudou = false;
+    for (const rec of ['clientes', 'historico']) {
+      for (const x of r[rec]) {
+        if (pendentes.has(rec + ':' + x.id)) continue; // alteração local ainda não enviada vence
+        const lista = estado[rec];
+        const i = lista.findIndex((e) => e.id === x.id);
+        if (x.excluido) {
+          if (i >= 0) lista.splice(i, 1);
+        } else if (i >= 0) lista[i] = x.dados;
+        else lista.push(x.dados);
+        mudou = true;
+      }
+    }
+    if (!desde) {
+      // Primeira sincronização neste aparelho: envia o que só existe aqui.
+      for (const rec of ['clientes', 'historico']) {
+        const noServidor = new Set(r[rec].map((x) => x.id));
+        for (const x of estado[rec]) if (!noServidor.has(x.id)) enfileirar(rec, x.id, x, false);
+      }
+      if (!r.dados.some((d) => d.chave === 'config') && api.usuario()?.is_admin && estado.cfg.st) enviarConfig();
+    }
+    for (const d of r.dados) aplicarDado(d.chave, d.valor);
+    if (mudou) await Promise.all([salvarClientes(), salvarHistorico()]);
+    await db.gravar('syncDesde', new Date(new Date(r.agora).getTime() - 10000).toISOString());
+    estado.ultimoSync = new Date().toISOString();
+    estado.erroSync = '';
+    if (estado.fila.length) await enviarFila();
+    if (appAberto && (mudou || r.dados.length)) {
+      renderTopo();
+      if (!$('#folha').hidden && $('#folha').dataset.tipo === 'orc') renderOrcamento();
+      else if (estado.vista === 'pedido') renderPedido();
+      else if (estado.vista === 'clientes') renderClientes();
+      else if (estado.vista === 'historico') renderHistorico();
+      renderBarra();
+    }
+  } catch (e) {
+    estado.erroSync = e.message;
+    if (e instanceof api.ErroSessao) sessaoExpirada(e.message);
+  } finally {
+    sincronizando = false;
+    if (estado.vista === 'painel') renderStatusSync();
+  }
+}
+
+let tConfig;
+function enviarConfig() {
+  clearTimeout(tConfig);
+  tConfig = setTimeout(() => {
+    api.chamar('PUT', '/dados/config', { valor: { condicoes: estado.cfg.condicoes, st: estado.cfg.st } }).catch((e) => aviso('Configuração não enviada ao servidor: ' + e.message));
+  }, 800);
+}
+
+async function proximoNumero() {
+  try {
+    return (await api.chamar('POST', '/historico/numero')).numero;
+  } catch {
+    // Sem conexão: número provisório local (L = local).
+    estado.seq += 1;
+    db.gravar('seq', estado.seq).catch(() => {});
+    return `L${estado.seq}`;
+  }
 }
 
 function linhaCatalogo(codigo) {
@@ -139,7 +308,12 @@ function indexar() {
 }
 
 const salvarOrc = () => db.gravar('orc', estado.orc).catch(() => {});
-const salvarCfg = () => db.gravar('cfg', estado.cfg).catch(() => {});
+const salvarCfgLocal = () => db.gravar('cfg', estado.cfg).catch(() => {});
+// Preferências compartilhadas (condições, ST) vão para o servidor; vendedor fica no aparelho/usuário.
+const salvarCfg = () => {
+  salvarCfgLocal();
+  enviarConfig();
+};
 const salvarClientes = () => db.gravar('clientes', estado.clientes).catch(() => {});
 const salvarHistorico = () => db.gravar('historico', estado.historico).catch(() => {});
 
@@ -454,16 +628,13 @@ function renderOrcamento() {
     </div>` : ''}`;
 }
 
-function salvarNoHistorico() {
+async function salvarNoHistorico() {
   const o = estado.orc;
   if (!o.itens.length) return null;
   const linhas = linhasOrcamento();
   const t = totalizar(linhas);
-  if (!o.id) {
-    o.id = uid();
-    o.numero = ++estado.seq;
-    db.gravar('seq', estado.seq).catch(() => {});
-  }
+  if (!o.id) o.id = uid();
+  if (!o.numero) o.numero = await proximoNumero();
   const agora = new Date().toISOString();
   const reg = {
     id: o.id,
@@ -487,6 +658,7 @@ function salvarNoHistorico() {
   };
   estado.historico = [reg, ...estado.historico.filter((h) => h.id !== o.id)];
   salvarHistorico();
+  enfileirar('historico', reg.id, reg);
   salvarOrc();
   return reg;
 }
@@ -494,7 +666,7 @@ function salvarNoHistorico() {
 async function exportar(tipo) {
   const linhas = linhasOrcamento();
   if (!linhas.length) return;
-  salvarNoHistorico();
+  await salvarNoHistorico();
   renderOrcamento();
   const tot = totalizar(linhas);
   const orc = {
@@ -731,6 +903,7 @@ function salvarCliente(form) {
     estado.clientes.push({ id, ...dados, criadoEm: new Date().toISOString() });
   }
   salvarClientes();
+  enfileirar('clientes', id, estado.clientes.find((c) => c.id === id));
   // Mantém o nome do cliente atualizado no orçamento aberto.
   if (estado.orc.clienteId === id) selecionarCliente(estado.clientes.find((c) => c.id === id));
   const depois = form.dataset.depois;
@@ -862,6 +1035,10 @@ async function carregarDoHistorico(id, duplicar) {
 
 // ---------- Painel ----------
 function renderPainel() {
+  setTimeout(() => {
+    renderStatusSync();
+    carregarUsuarios();
+  });
   const ds = estado.ds;
   const f = ds.fontes || {};
   const st = estado.cfg.st;
@@ -875,21 +1052,45 @@ function renderPainel() {
     fora,
     ncmsFora,
     html: estado.st
-      ? `<p><b>Tabela: ${esc(estado.st.arquivo || 'PR ST')}</b><br>${comSt} produtos com ST · ${ds.produtos.length - comSt - fora.length} sem ST · ${estado.st.origem === 'upload' ? 'importada neste aparelho' : 'versão publicada no app'}</p>
-         ${estado.st.origem === 'upload' ? '<button class="btn btn--contorno btn--mini" data-acao="restaurar-st" style="margin-bottom:12px">Voltar à tabela de ST publicada</button>' : ''}`
+      ? `<p><b>Tabela: ${esc(estado.st.arquivo || 'PR ST')}</b><br>${comSt} produtos com ST · ${ds.produtos.length - comSt - fora.length} sem ST · compartilhada com todos</p>
+`
       : '<p>Nenhuma tabela de ST carregada. Envie o PDF “PR ST” em Atualizar tabela.</p>',
   };
+  const eu = api.usuario();
   $('#painel').innerHTML = `
+    <div class="cartao">
+      <h3>Conta e sincronização</h3>
+      <p><b>${esc(eu?.nome || eu?.email || '—')}</b>${eu?.is_admin ? ' · administrador' : ''}<br><span class="mudo">${esc(eu?.email || '')}</span></p>
+      <p id="status-sync" class="mudo" style="font-size:14px"></p>
+      <div class="botoes">
+        <button class="btn btn--contorno" data-acao="sincronizar">Sincronizar agora</button>
+        <button class="btn btn--perigo" data-acao="sair">Sair</button>
+      </div>
+    </div>
+
+    ${eu?.is_admin ? `<div class="cartao">
+      <h3>Usuários</h3>
+      <p>Só quem estiver nesta lista entra no app (login Google). A conta também precisa estar entre os “usuários de teste” do login Google do app de vendas.</p>
+      <div id="lista-usuarios"><p class="mudo">Carregando…</p></div>
+      <form id="form-usuario" class="form" style="margin-top:12px">
+        <div class="grade2">
+          <label class="campo"><span>E-mail Google</span><input name="email" type="email" required autocomplete="off" placeholder="nome@gmail.com"></label>
+          <label class="campo"><span>Nome</span><input name="nome" autocomplete="off"></label>
+        </div>
+        <label class="check"><input type="checkbox" name="is_admin"> <span>Administrador (gerencia usuários)</span></label>
+        <div class="botoes"><button class="btn" type="submit">+ Adicionar usuário</button></div>
+      </form>
+    </div>` : ''}
+
     <div class="cartao">
       <h3>Tabela ativa</h3>
       <p><b>${esc(f.pdf?.lista || 'Tabela 44')}</b><br>
-      Data de referência ${dataBR(f.pdf?.dataRef)} · ${ds.produtos.length} produtos · ${ds.origem === 'upload' ? 'importada neste aparelho' : 'versão publicada no app'}</p>
+      Data de referência ${dataBR(f.pdf?.dataRef)} · ${ds.produtos.length} produtos · compartilhada com todos os usuários</p>
       <p class="mudo" style="font-size:14px">
         PDF: ${esc(f.pdf?.arquivo || '—')} (${dataBR(f.pdf?.em)})<br>
         Planilha: ${esc(f.xls?.arquivo || '—')} (${dataBR(f.xls?.em)})<br>
         Faixas: ${ds.faixas.map((x) => `${esc(x.nome)} (comissão ${pct(x.comissao)})`).join(' · ')}
       </p>
-      ${ds.origem === 'upload' ? '<button class="btn btn--contorno" data-acao="restaurar">Voltar à versão publicada</button>' : ''}
     </div>
 
     <div class="cartao">
@@ -963,7 +1164,7 @@ function renderPainel() {
       <h3>Ofertas</h3>
       ${estado.ofertas ? `<p><b>${esc(estado.ofertas.nome)}</b> · ${Object.keys(estado.ofertas.precos || {}).length} códigos · ${dataBR(estado.ofertas.inicio)} a ${dataBR(estado.ofertas.validade)} · comissão ${pct(estado.ofertas.comissao ?? 0)}<br>
         <span class="${ofertasAtivas() ? '' : 'mudo'}">${ofertasAtivas() ? 'Valendo agora.' : 'Fora do período — os preços de tabela voltam automaticamente.'}</span>
-        ${estado.ofertas.origem === 'upload' ? ' · editada neste aparelho' : ''}</p>` : '<p>Nenhuma oferta cadastrada.</p>'}
+</p>` : '<p>Nenhuma oferta cadastrada.</p>'}
       <details class="detalhes detalhes--neutro">
         <summary>Editar / cadastrar ofertas</summary>
         <form id="form-ofertas" class="form" style="margin-top:12px">
@@ -979,7 +1180,6 @@ function renderPainel() {
           </label>
           <div class="botoes">
             <button class="btn" type="submit">Salvar ofertas</button>
-            ${estado.ofertas?.origem === 'upload' ? '<button class="btn btn--contorno" type="button" data-acao="restaurar-ofertas">Voltar às ofertas publicadas</button>' : ''}
           </div>
         </form>
       </details>
@@ -1010,6 +1210,34 @@ function renderPainel() {
       </div>
     </div>
     <p class="mudo" style="font-size:13px">Mantac Pedidos · ${estado.clientes.length} clientes · dados salvos só neste aparelho · funciona offline.</p>`;
+}
+
+function renderStatusSync() {
+  const el = $('#status-sync');
+  if (!el) return;
+  const n = estado.fila.length;
+  el.innerHTML = `${estado.ultimoSync ? `Sincronizado às ${new Date(estado.ultimoSync).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}` : 'Ainda não sincronizado nesta sessão'}${n ? ` · <b>${n} alteração(ões) aguardando envio</b>` : ' · tudo enviado'}${estado.erroSync ? `<br><span style="color:var(--erro)">${esc(estado.erroSync)}</span>` : ''}`;
+}
+
+async function carregarUsuarios() {
+  const el = $('#lista-usuarios');
+  if (!el) return;
+  try {
+    estado.usuarios = await api.chamar('GET', '/usuarios');
+  } catch (e) {
+    el.innerHTML = `<p style="color:var(--erro)">${esc(e.message)}</p>`;
+    return;
+  }
+  const eu = api.usuario();
+  el.innerHTML = estado.usuarios
+    .map(
+      (u) => `<div class="cliente-item">
+      <div class="item__abrir" style="cursor:default"><span class="item__desc">${esc(u.nome || u.email)}${u.is_admin ? ' <span class="selo">admin</span>' : ''}${u.ativo ? '' : ' <span class="selo selo--st">inativo</span>'}</span>
+      <span class="item__meta">${esc(u.email)}${u.ultimo_acesso ? ' · último acesso ' + dataHora(u.ultimo_acesso) : ' · nunca entrou'}</span></div>
+      ${u.id === eu?.id ? '' : `<button class="btn btn--perigo btn--mini" data-remover-usuario="${u.id}">Remover</button>`}
+    </div>`
+    )
+    .join('');
 }
 
 async function lerArquivo(file) {
@@ -1083,15 +1311,20 @@ async function salvarOfertas(form) {
     else precos[cod] = v;
   }
   if (invalidos.length && !(await confirmar(`${invalidos.length} linha(s) ignorada(s) (código inexistente ou preço inválido): ${invalidos.slice(0, 5).join(' | ')}${invalidos.length > 5 ? '…' : ''}. Salvar o resto?`, 'Salvar'))) return;
-  estado.ofertas = {
+  const valor = {
     nome: f.nome.trim() || 'Ofertas',
     inicio: f.inicio || null,
     validade: f.validade,
     comissao: (Number(f.comissao) || 0) / 100,
     precos,
-    origem: 'upload',
   };
-  await db.gravar('ofertas', estado.ofertas);
+  try {
+    await api.chamar('PUT', '/dados/ofertas', { valor });
+  } catch (e) {
+    if (e instanceof api.ErroSessao) return sessaoExpirada(e.message);
+    return aviso('Não foi possível salvar no servidor: ' + e.message);
+  }
+  aplicarDado('ofertas', valor);
   renderPainel();
   aviso(`${Object.keys(precos).length} ofertas salvas`);
 }
@@ -1170,9 +1403,12 @@ function importarPedidos() {
       atualizadoEm: agora,
     };
     estado.historico = [reg, ...estado.historico.filter((h) => h.id !== id)];
+    enfileirar('clientes', c.id, c, false);
+    enfileirar('historico', reg.id, reg, false);
   }
   salvarClientes();
   salvarHistorico();
+  enviarFila();
   estado.previaPedidos = null;
   renderPainel();
   aviso(`${lidos.length} pedido(s) no histórico${novosClientes ? ` · ${novosClientes} cliente(s) novo(s)` : ''}`);
@@ -1201,7 +1437,11 @@ async function importarBackup(file) {
     estado.historico = [...his.values()].sort((a, b) => (b.atualizadoEm || '').localeCompare(a.atualizadoEm || ''));
     estado.seq = Math.max(estado.seq, d.seq || 0, ...estado.historico.map((h) => h.numero || 0));
     if (d.cfg) estado.cfg = { ...estado.cfg, ...d.cfg, st: { ...estado.cfg.st, ...d.cfg.st } };
-    await Promise.all([salvarClientes(), salvarHistorico(), salvarCfg(), db.gravar('seq', estado.seq)]);
+    await Promise.all([salvarClientes(), salvarHistorico(), db.gravar('seq', estado.seq)]);
+    salvarCfg();
+    for (const c of d.clientes || []) enfileirar('clientes', c.id, cli.get(c.id), false);
+    for (const h of d.historico || []) enfileirar('historico', h.id, his.get(h.id), false);
+    enviarFila();
     renderPainel();
     aviso('Backup importado');
   } catch (e) {
@@ -1232,6 +1472,18 @@ function ligarEventos() {
       e.preventDefault();
       salvarCliente(e.target);
     }
+    if (e.target.id === 'form-usuario') {
+      e.preventDefault();
+      const f = Object.fromEntries(new FormData(e.target));
+      api
+        .chamar('POST', '/usuarios', { email: f.email, nome: f.nome, is_admin: e.target.is_admin.checked })
+        .then(() => {
+          e.target.reset();
+          aviso('Usuário adicionado');
+          carregarUsuarios();
+        })
+        .catch((err) => aviso(err.message));
+    }
     if (e.target.id === 'form-ofertas') {
       e.preventDefault();
       salvarOfertas(e.target);
@@ -1240,7 +1492,7 @@ function ligarEventos() {
 
   document.addEventListener('click', async (e) => {
     const el = e.target.closest(
-      '#ofertas-chip,[data-condicao],[data-ir],[data-acao],[data-abrir],[data-add],[data-pend],[data-faixa-padrao],[data-faixa-item],[data-passo],[data-remover],[data-exportar],[data-escolher],[data-editar-cliente],[data-orcar],[data-excluir-cliente],[data-ver-orc],[data-reabrir],[data-duplicar],[data-excluir-orc],[data-historico-cliente]'
+      '#ofertas-chip,[data-remover-usuario],[data-condicao],[data-ir],[data-acao],[data-abrir],[data-add],[data-pend],[data-faixa-padrao],[data-faixa-item],[data-passo],[data-remover],[data-exportar],[data-escolher],[data-editar-cliente],[data-orcar],[data-excluir-cliente],[data-ver-orc],[data-reabrir],[data-duplicar],[data-excluir-orc],[data-historico-cliente]'
     );
     if (!el) return;
     const d = el.dataset;
@@ -1309,10 +1561,22 @@ function ligarEventos() {
       irPara('pedido');
       return aviso('Cliente selecionado no pedido');
     }
+    if (el.dataset.removerUsuario) {
+      if (!(await confirmar('Remover o acesso deste usuário?', 'Remover', true))) return;
+      try {
+        await api.chamar('DELETE', '/usuarios/' + el.dataset.removerUsuario);
+        aviso('Usuário removido');
+      } catch (e) {
+        aviso(e.message);
+      }
+      return carregarUsuarios();
+    }
     if (d.excluirCliente) {
       if (!(await confirmar('Excluir este cliente? Os orçamentos do histórico continuam salvos.', 'Excluir', true))) return;
       estado.clientes = estado.clientes.filter((c) => c.id !== d.excluirCliente);
       salvarClientes();
+      enfileirar('clientes', d.excluirCliente, null);
+      fecharModal();
       if (estado.orc.clienteId === d.excluirCliente) estado.orc.clienteId = null;
       renderClientes();
       return aviso('Cliente excluído');
@@ -1331,6 +1595,7 @@ function ligarEventos() {
       if (!(await confirmar('Excluir este orçamento do histórico?', 'Excluir', true))) return;
       estado.historico = estado.historico.filter((h) => h.id !== d.excluirOrc);
       salvarHistorico();
+      enfileirar('historico', d.excluirOrc, null);
       if (estado.orc.id === d.excluirOrc) Object.assign(estado.orc, { id: null, numero: null });
       fecharFolha();
       renderHistorico();
@@ -1355,50 +1620,48 @@ function ligarEventos() {
       case 'buscar-cnpj':
         return buscarCnpj();
       case 'salvar-orc': {
-        const r = salvarNoHistorico();
+        const r = await salvarNoHistorico();
         renderOrcamento();
         return aviso(`Orçamento nº ${r.numero} salvo no histórico`);
       }
       case 'novo-orc':
         return novoOrcamento();
-      case 'confirmar':
-        if (estado.previa.st) {
-          estado.st = estado.previa.st;
-          estado.previa = null;
-          db.gravar('st', estado.st);
-          renderPainel();
-          return aviso('Tabela de ST atualizada');
+      case 'confirmar': {
+        const chave = estado.previa.st ? 'st' : 'tabela44';
+        const valor = { ...(estado.previa.st || estado.previa.ds) };
+        delete valor.origem;
+        aviso('Enviando para o servidor…');
+        try {
+          await api.chamar('PUT', '/dados/' + chave, { valor }, { timeout: 60000 });
+        } catch (e) {
+          if (e instanceof api.ErroSessao) return sessaoExpirada(e.message);
+          return aviso('Não foi possível enviar: ' + e.message + ' — tente de novo com internet.');
         }
-        estado.ds = estado.previa.ds;
+        aplicarDado(chave, valor);
         estado.previa = null;
-        db.gravar('ds', estado.ds);
+        if (chave === 'st') {
+          renderPainel();
+          return aviso('Tabela de ST atualizada para todos');
+        }
         indexar();
         renderTopo();
         renderPainel();
-        return aviso('Tabela atualizada');
+        return aviso('Tabela atualizada para todos');
+      }
       case 'descartar':
         estado.previa = null;
         return renderPainel();
-      case 'restaurar':
-        if (!(await confirmar('Descartar as importações feitas neste aparelho e voltar à tabela publicada?', 'Restaurar', true))) return;
-        estado.ds = await carregarEmbutido();
-        await db.apagar('ds');
-        indexar();
-        renderTopo();
-        renderPainel();
-        return aviso('Tabela publicada restaurada');
-      case 'restaurar-st':
-        if (!(await confirmar('Descartar a tabela de ST importada neste aparelho e voltar à publicada?', 'Restaurar', true))) return;
-        estado.st = await carregarStEmbutido();
-        await db.apagar('st');
-        renderPainel();
-        return aviso('Tabela de ST publicada restaurada');
-      case 'restaurar-ofertas':
-        if (!(await confirmar('Descartar as ofertas editadas neste aparelho e voltar às publicadas?', 'Restaurar', true))) return;
-        estado.ofertas = await carregarOfertasEmbutidas();
-        await db.apagar('ofertas');
-        renderPainel();
-        return aviso('Ofertas publicadas restauradas');
+      case 'sincronizar':
+        await sincronizar();
+        carregarUsuarios();
+        return aviso(estado.erroSync ? 'Falha: ' + estado.erroSync : 'Sincronizado');
+      case 'sair':
+        if (estado.fila.length && !(await confirmar(`${estado.fila.length} alteração(ões) ainda não foram enviadas e serão perdidas se sair. Sair mesmo assim?`, 'Sair', true))) return;
+        if (!(await confirmar('Sair da conta neste aparelho? Os dados locais serão apagados deste aparelho (continuam no servidor).', 'Sair', true))) return;
+        await api.sair();
+        for (const k of ['clientes', 'historico', 'fila', 'syncDesde', 'ds', 'st', 'ofertas', 'orc']) await db.apagar(k).catch(() => {});
+        location.reload();
+        return;
       case 'importar-pedidos':
         return importarPedidos();
       case 'descartar-pedidos':
@@ -1468,6 +1731,9 @@ function ligarEventos() {
     } else if (el.dataset.cfg === 'vendedor') {
       estado.cfg.vendedor = el.value.trim();
       if (!estado.orc.itens.length) estado.orc.vendedor = estado.cfg.vendedor;
+      api.chamar('PATCH', '/eu', { vendedor: estado.cfg.vendedor }).then((r) => api.guardarSessao(api.token(), r.usuario)).catch(() => {});
+      salvarCfgLocal();
+      return aviso('Vendedor salvo');
     } else return;
     salvarCfg();
     aviso('Configuração salva');
@@ -1491,6 +1757,7 @@ function ligarEventos() {
     if (e.dataTransfer.files[0]) lerArquivo(e.dataTransfer.files[0]);
   });
 
+  $('#login-tentar').addEventListener('click', () => (api.token() ? abrirApp() : mostrarLogin()));
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
     if (!$('#modal').hidden) fecharModal();

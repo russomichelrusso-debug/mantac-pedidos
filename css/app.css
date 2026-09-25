@@ -390,3 +390,13 @@ main { max-width: 820px; margin: 0 auto; padding: var(--e-md) var(--e-md) var(--
 /* Grade de dados sem "buraco" cinza quando sobra célula na última linha. */
 .dados { gap: 0; background: none; border: 0; border-top: 1px solid var(--linha); border-left: 1px solid var(--linha); }
 .dados div { border-right: 1px solid var(--linha); border-bottom: 1px solid var(--linha); }
+
+/* ---------- Login ---------- */
+.login { position: fixed; inset: 0; z-index: 70; background: var(--canvas); border-top: 4px solid var(--azul); display: grid; place-items: center; padding: 24px 16px; overflow-y: auto; }
+.login__caixa { width: 100%; max-width: 380px; display: grid; justify-items: center; gap: 16px; text-align: center; }
+.login__caixa img { width: 220px; height: auto; }
+.login__titulo { margin: 0; font-size: 22px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; }
+.login__texto { margin: 0; color: var(--corpo); font-size: 15px; }
+.login__google { min-height: 44px; }
+.login__msg { margin: 0; font-size: 15px; color: var(--corpo); font-weight: 500; }
+.login__msg--erro { color: var(--erro); }
