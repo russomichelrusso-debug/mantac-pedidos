@@ -1,17 +1,19 @@
-// Gera data/tabela44.json (dataset inicial do app) a partir dos arquivos
-// originais em tools/fontes/ (não versionados: o PDF traz custo de compra).
+// Gera data/tabela44.json (dataset inicial do app) e data/st-pr.json (ICMS-ST
+// por produto) a partir dos arquivos originais em tools/fontes/ (não
+// versionados: o PDF da lista traz custo de compra).
 //
-//   node tools/build-data.mjs [tabela.pdf] [tabela.xls]
+//   node tools/build-data.mjs [tabela.pdf] [tabela.xls] [st-pr.pdf]
 import fs from 'node:fs';
 import path from 'node:path';
 import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs';
 import XLSX from 'xlsx';
-import { parseTabelaPdf, parseTabelaXls } from '../js/parsers.js';
+import { parseTabelaPdf, parseTabelaXls, parseStPdf } from '../js/parsers.js';
 import { aplicarPdf, aplicarXls } from '../js/dados.js';
 
 const raiz = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
 const pdfPath = process.argv[2] || path.join(raiz, 'tools/fontes/tabela44.pdf');
 const xlsPath = process.argv[3] || path.join(raiz, 'tools/fontes/tabela44.xls');
+const stPath = process.argv[4] || path.join(raiz, 'tools/fontes/st-pr.pdf');
 
 async function paginasPdf(file) {
   const doc = await pdfjs.getDocument({ data: new Uint8Array(fs.readFileSync(file)) }).promise;
@@ -47,3 +49,16 @@ console.log(`Lista: ${pdf.lista} | ref ${pdf.dataRef}`);
 console.log(`PDF: ${pdf.produtos.length} produtos | XLS: ${xls.produtos.length} | dataset: ${ds.produtos.length} | com exceção: ${exc}`);
 console.log('Faixas:', ds.faixas.map((f) => `${f.nome} ×${f.fator} com ${f.comissao * 100}%`).join(' · '));
 console.log(`-> ${path.relative(raiz, out)} (${(fs.statSync(out).size / 1024).toFixed(0)} KB)`);
+
+if (fs.existsSync(stPath)) {
+  const st = parseStPdf(await paginasPdf(stPath));
+  const porCodigo = {};
+  for (const p of st.produtos) porCodigo[p.codigo] = p.st ? { mva: p.mva, aliqInterna: p.aliqInterna, pst: p.pst, cest: p.cest } : null;
+  const saida = { arquivo: path.basename(stPath), em: new Date().toISOString(), porCodigo };
+  const outSt = path.join(raiz, 'data/st-pr.json');
+  fs.writeFileSync(outSt, JSON.stringify(saida));
+  const cods = new Set(ds.produtos.map((p) => p.codigo));
+  const fora = ds.produtos.filter((p) => !(p.codigo in porCodigo)).length;
+  console.log(`ST: ${st.produtos.length} produtos (${st.produtos.filter((p) => p.st).length} com ST) | da tabela sem ST informada: ${fora} | só no ST: ${st.produtos.filter((p) => !cods.has(p.codigo)).length}`);
+  console.log(`-> ${path.relative(raiz, outSt)} (${(fs.statSync(outSt).size / 1024).toFixed(0)} KB)`);
+}

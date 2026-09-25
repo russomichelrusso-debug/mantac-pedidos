@@ -337,6 +337,12 @@ main { max-width: 820px; margin: 0 auto; padding: var(--e-md) var(--e-md) var(--
 .tabela-ncm th { font-size: 11px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; color: var(--mudo); }
 .tabela-ncm input { width: 90px; min-height: 40px; padding: 6px 8px; border: 1px solid var(--linha-forte); border-radius: 0; text-align: right; }
 
+.check { display: flex; gap: var(--e-sm); align-items: flex-start; cursor: pointer; margin: var(--e-md) 0 0; }
+.check input { width: 22px; height: 22px; margin: 2px 0 0; accent-color: var(--azul); flex: none; }
+.check small { font-size: 13px; font-weight: 400; }
+.detalhes { margin-top: var(--e-md); border-top: 1px solid var(--linha); padding-top: var(--e-sm); }
+.detalhes summary { cursor: pointer; font-weight: 600; color: var(--alerta); }
+
 /* ---------- Aviso (toast) ---------- */
 .aviso {
   position: fixed; left: 50%; bottom: calc(96px + env(safe-area-inset-bottom)); z-index: 60;

@@ -166,3 +166,49 @@ export function parseTabelaXls(linhas) {
   }
   return { faixas, produtos };
 }
+
+/**
+ * Lê a tabela de ICMS-ST do PR por produto ("PR ST … MANTAC"), com colunas
+ * Cód. · Material · UM · Peso · NCM · ICMS interno · MVA · %ST · CEST.
+ * @returns {{produtos: {codigo:string, ncm:string, st:boolean, aliqInterna:number|null, mva:number|null, pst:number|null, cest:string|null}[]}}
+ */
+export function parseStPdf(paginas) {
+  const produtos = [];
+  const pctNum = (s) => Number(s.replace('%', '').replace('.', '').replace(',', '.'));
+  for (const itens of paginas) {
+    const linhas = [];
+    for (const i of itens.filter((x) => x.str && x.str.trim())) {
+      let l = linhas.find((x) => Math.abs(x.y - i.y) < 2.5);
+      if (!l) linhas.push((l = { y: i.y, itens: [] }));
+      l.itens.push(i);
+    }
+    for (const l of linhas) {
+      l.itens.sort((a, b) => a.x - b.x);
+      const primeiro = txt(l.itens[0].str);
+      if (l.itens[0].x > 45 || !/^[0-9][0-9A-Za-z-]*$/.test(primeiro)) continue;
+      const resto = l.itens.slice(1).map((i) => txt(i.str));
+      const ncm = resto.find((s) => /^\d{2}\.\d{2}\.\d{4}$/.test(s));
+      if (!ncm) continue;
+      const juntos = resto.join(' ');
+      const pcts = resto.filter((s) => /^\d+,\d+%$/.test(s)).map(pctNum);
+      const semSt = /N[ÃA]O POSSUI ST/i.test(juntos);
+      const cest = resto.find((s) => /^\d{2}\.\d{3}\.\d{2}$/.test(s)) || null;
+      produtos.push({
+        codigo: primeiro,
+        ncm,
+        st: !semSt && pcts.length >= 2,
+        aliqInterna: pcts[0] ?? null,
+        mva: semSt ? null : pcts[1] ?? null,
+        pst: semSt ? null : pcts[2] ?? null,
+        cest: semSt ? null : cest,
+      });
+    }
+  }
+  return { produtos };
+}
+
+/** Diz se as páginas parecem a tabela de ST (e não a lista de preços). */
+export function pareceTabelaSt(paginas) {
+  const cab = (paginas[0] || []).map((i) => i.str).join(' ');
+  return /%ST/.test(cab) && /MVA/.test(cab) && !/Lista de Pre[çc]os/i.test(cab);
+}
