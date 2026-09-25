@@ -7,42 +7,61 @@ const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const norm = (s) => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[”“″]/g, '"').replace(/½/g, '1/2');
 const dataBR = (iso) => (iso ? iso.slice(0, 10).split('-').reverse().join('/') : '—');
+const dataHora = (iso) => (iso ? new Date(iso).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : '—');
+const soDigitos = (s) => String(s ?? '').replace(/\D/g, '');
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+
+function formatarDoc(v) {
+  const d = soDigitos(v);
+  if (d.length === 14) return d.replace(/(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})/, '$1.$2.$3/$4-$5');
+  if (d.length === 11) return d.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3-$4');
+  return String(v ?? '').trim();
+}
 
 const ICONES = {
   mais: '<svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>',
   menos: '<svg viewBox="0 0 24 24"><path d="M5 12h14"/></svg>',
   x: '<svg viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg>',
   voltar: '<svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg>',
+  info: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/></svg>',
+  trocar: '<svg viewBox="0 0 24 24"><path d="M7 4 3 8l4 4M3 8h13M17 20l4-4-4-4M21 16H8"/></svg>',
+  lixo: '<svg viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v6M14 11v6"/></svg>',
+  editar: '<svg viewBox="0 0 24 24"><path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5z"/></svg>',
 };
+
+const orcVazio = (cfg) => ({ id: null, numero: null, clienteId: null, cliente: '', clienteDoc: '', vendedor: cfg.vendedor, faixaPadrao: 0, itens: [] });
 
 const estado = {
   ds: null,
   cat: { linhas: [], itens: {} },
   cfg: structuredClone(CONFIG_PADRAO),
-  orc: { cliente: '', vendedor: CONFIG_PADRAO.vendedor, itens: [] },
+  orc: null,
+  clientes: [],
+  historico: [],
+  seq: 0,
   busca: '',
-  classe: '',
-  limite: 60,
-  detalhe: null, // { codigo, k, qtd }
+  limite: 30,
+  pend: {}, // quantidade escolhida no card antes de adicionar
   previa: null,
+  vista: 'pedido',
 };
 let indice = [];
 let porCodigo = new Map();
 
 // ---------- Carga ----------
 async function carregarEmbutido() {
-  const r = await fetch('data/tabela44.json', { cache: 'no-cache' });
-  const ds = await r.json();
+  const ds = await (await fetch('data/tabela44.json', { cache: 'no-cache' })).json();
   ds.origem = 'embutido';
   return ds;
 }
 
 async function iniciar() {
-  const [cfg, orc, ds] = await Promise.all([db.ler('cfg'), db.ler('orc'), db.ler('ds')]).catch(() => []);
+  const [cfg, orc, ds, clientes, historico, seq] = await Promise.all(['cfg', 'orc', 'ds', 'clientes', 'historico', 'seq'].map((k) => db.ler(k).catch(() => undefined)));
   if (cfg) estado.cfg = { ...structuredClone(CONFIG_PADRAO), ...cfg, st: { ...CONFIG_PADRAO.st, ...cfg.st } };
-  if (orc) estado.orc = orc;
-  estado.orc.vendedor ||= estado.cfg.vendedor;
-  // Enquanto não houver importação manual, usa sempre a tabela publicada no app.
+  estado.orc = { ...orcVazio(estado.cfg), ...(orc || {}) };
+  estado.clientes = clientes || [];
+  estado.historico = historico || [];
+  estado.seq = seq || 0;
   if (ds && ds.origem === 'upload') estado.ds = ds;
   else {
     try {
@@ -56,8 +75,8 @@ async function iniciar() {
   } catch { /* catálogo técnico é opcional */ }
   indexar();
   ligarEventos();
-  renderTudo();
-  irPara(location.hash.slice(1) || 'consulta', false);
+  renderTopo();
+  irPara(location.hash.slice(1) || 'pedido', false);
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 }
 
@@ -80,6 +99,8 @@ function indexar() {
 
 const salvarOrc = () => db.gravar('orc', estado.orc).catch(() => {});
 const salvarCfg = () => db.gravar('cfg', estado.cfg).catch(() => {});
+const salvarClientes = () => db.gravar('clientes', estado.clientes).catch(() => {});
+const salvarHistorico = () => db.gravar('historico', estado.historico).catch(() => {});
 
 function aviso(msg) {
   const el = $('#aviso');
@@ -89,108 +110,370 @@ function aviso(msg) {
   aviso.t = setTimeout(() => el.classList.remove('on'), 2600);
 }
 
+// ---------- Modal de confirmação ----------
+function confirmar(msg, rotulo = 'Confirmar', perigo = false) {
+  return new Promise((ok) => {
+    abrirModal(`<p class="modal__msg">${esc(msg)}</p>
+      <div class="botoes botoes--fim">
+        <button class="btn btn--contorno" data-resp="0">Cancelar</button>
+        <button class="btn ${perigo ? 'btn--perigo-cheio' : ''}" data-resp="1">${esc(rotulo)}</button>
+      </div>`);
+    $('#modal-corpo').addEventListener('click', function h(e) {
+      const b = e.target.closest('[data-resp]');
+      if (!b) return;
+      $('#modal-corpo').removeEventListener('click', h);
+      fecharModal();
+      ok(b.dataset.resp === '1');
+    });
+  });
+}
+
+function abrirModal(html) {
+  $('#modal-corpo').innerHTML = html;
+  $('#modal').hidden = false;
+  $('#modal-corpo').focus();
+}
+function fecharModal() {
+  $('#modal').hidden = true;
+  $('#modal-corpo').innerHTML = '';
+}
+
+function abrirFolha(html) {
+  $('#folha-corpo').innerHTML = html;
+  $('#folha').hidden = false;
+  document.body.style.overflow = 'hidden';
+  $('#folha-corpo').scrollTop = 0;
+  $('#folha-corpo').focus();
+}
+function fecharFolha() {
+  $('#folha').hidden = true;
+  $('#folha').dataset.tipo = '';
+  document.body.style.overflow = '';
+}
+
+// Re-renderizar remove o campo focado e dispara "change" no meio do innerHTML;
+// tira o foco antes para o evento acontecer fora da troca.
+function soltarFoco() {
+  const a = document.activeElement;
+  if (a?.matches?.('input[type="number"]')) a.blur();
+}
+
 // ---------- Navegação ----------
+const VISTAS = ['pedido', 'clientes', 'historico', 'painel'];
 function irPara(vista, push = true) {
-  if (!['consulta', 'orcamento', 'painel'].includes(vista)) vista = 'consulta';
+  if (!VISTAS.includes(vista)) vista = 'pedido';
+  estado.vista = vista;
   document.querySelectorAll('.vista').forEach((v) => (v.hidden = v.dataset.vista !== vista));
-  document.querySelectorAll('.aba').forEach((b) => (b.dataset.ir === vista ? b.setAttribute('aria-current', 'page') : b.removeAttribute('aria-current')));
+  document.querySelectorAll('[data-ir]').forEach((b) => (b.dataset.ir === vista ? b.setAttribute('aria-current', 'page') : b.removeAttribute('aria-current')));
   if (push) history.replaceState(null, '', '#' + vista);
-  if (vista === 'orcamento') renderOrcamento();
+  if (vista === 'pedido') renderPedido();
+  if (vista === 'clientes') renderClientes();
+  if (vista === 'historico') renderHistorico();
   if (vista === 'painel') renderPainel();
+  renderBarra();
   window.scrollTo(0, 0);
 }
 
-// ---------- Consulta ----------
-function renderTudo() {
+function renderTopo() {
   const f = estado.ds.fontes?.pdf;
   $('#topo-info').textContent = `${f?.lista ? 'Tabela ' + f.lista.split(' - ')[0] : 'Tabela 44'} · ${dataBR(f?.dataRef)}`;
-  renderClasses();
-  renderResultados();
-  renderBadge();
 }
 
-function renderClasses() {
-  const cont = new Map();
-  for (const p of estado.ds.produtos) cont.set(p.classe || 'Outros', (cont.get(p.classe || 'Outros') || 0) + 1);
-  const bt = (v, rot) => `<button type="button" data-classe="${esc(v)}" aria-pressed="${estado.classe === v}">${esc(rot)}</button>`;
-  $('#classes').innerHTML = bt('', 'Todas') + [...cont.keys()].map((c) => bt(c, c)).join('');
+// ---------- Pedido ----------
+function clienteAtual() {
+  return estado.clientes.find((c) => c.id === estado.orc.clienteId) || null;
+}
+
+function renderClienteCard() {
+  const c = clienteAtual();
+  const nome = c?.nome || estado.orc.cliente;
+  if (!nome) {
+    $('#cliente-card').innerHTML = `<button class="cliente-vazio" data-acao="escolher-cliente">＋ Selecionar cliente</button>`;
+    return;
+  }
+  const qtdOrc = c ? estado.historico.filter((h) => h.clienteId === c.id).length : 0;
+  $('#cliente-card').innerHTML = `<div class="cliente-card">
+      <div class="cliente-card__info">
+        <span class="rotulo">Cliente</span>
+        <b class="cliente-card__nome">${esc(nome)}</b>
+        <span class="mudo">${esc(formatarDoc(c?.doc || estado.orc.clienteDoc) || 'Sem CNPJ')}${c?.cidade ? ' · ' + esc(c.cidade) : ''}</span>
+        ${qtdOrc ? `<button class="link" data-historico-cliente="${esc(c.id)}">${qtdOrc} orçamento${qtdOrc > 1 ? 's' : ''} anterior${qtdOrc > 1 ? 'es' : ''}</button>` : ''}
+      </div>
+      <button class="btn-icone" data-acao="escolher-cliente" aria-label="Trocar cliente">${ICONES.trocar}</button>
+    </div>`;
+}
+
+function renderFaixaPadrao() {
+  $('#faixa-padrao').innerHTML = estado.ds.faixas
+    .map((f, k) => `<button data-faixa-padrao="${k}" aria-pressed="${k === estado.orc.faixaPadrao}">${esc(f.nome)}<small>com. ${pct(f.comissao)}</small></button>`)
+    .join('');
+}
+
+function renderPedido() {
+  $('#busca').value = estado.busca;
+  renderClienteCard();
+  renderFaixaPadrao();
+  renderResultados();
 }
 
 function filtrar() {
   const termos = norm(estado.busca).split(/\s+/).filter(Boolean);
-  let r = indice.filter((x) => (!estado.classe || (x.p.classe || 'Outros') === estado.classe) && termos.every((t) => x.chave.includes(t)));
+  let r = indice.filter((x) => termos.every((t) => x.chave.includes(t)));
   if (termos.length === 1) {
     const t = termos[0];
-    r = [...r.filter((x) => norm(x.p.codigo) === t), ...r.filter((x) => norm(x.p.codigo) !== t && norm(x.p.codigo).startsWith(t)), ...r.filter((x) => !norm(x.p.codigo).startsWith(t))];
+    const cod = (x) => norm(x.p.codigo);
+    r = [...r.filter((x) => cod(x) === t), ...r.filter((x) => cod(x) !== t && cod(x).startsWith(t)), ...r.filter((x) => !cod(x).startsWith(t))];
   }
   return r.map((x) => x.p);
 }
 
-function precoBase(p) {
-  return calcularItem(p, estado.ds.faixas, 0, 1, estado.cfg);
+const qtdPendente = (p) => estado.pend[p.codigo] ?? p.emb;
+
+function cardProduto(p) {
+  const k = estado.orc.faixaPadrao;
+  const f = estado.ds.faixas[k];
+  const c = calcularItem(p, estado.ds.faixas, k, 1, estado.cfg);
+  const tabela = calcularItem(p, estado.ds.faixas, 0, 1, estado.cfg);
+  const noOrc = estado.orc.itens.find((i) => i.codigo === p.codigo);
+  const tec = estado.cat.itens?.[p.codigo];
+  return `<div class="card" data-card="${esc(p.codigo)}">
+    <div class="card__topo">
+      <span class="selo">${esc(p.classe || p.tipo || 'Produto')}</span>
+      ${c.temSt ? '<span class="selo selo--st">ST</span>' : ''}
+      ${noOrc ? `<span class="selo selo--ok">No orçamento · ${numero(noOrc.qtd)} ${esc(p.um)}</span>` : ''}
+    </div>
+    <button class="card__nome" data-abrir="${esc(p.codigo)}">${esc(p.descricao)}${tec ? `<span class="info" aria-label="Ficha técnica">${ICONES.info}</span>` : ''}</button>
+    <div class="card__sub">Cód. ${esc(p.codigo)} · Emb. ${numero(p.emb)} ${esc(p.um)} · IPI ${pct(p.ipi / 100)}</div>
+    <div class="card__rodape">
+      <div class="qtd qtd--mini">
+        <button class="btn-icone" data-pend="${esc(p.codigo)}" data-d="-1" aria-label="Diminuir">${ICONES.menos}</button>
+        <input type="number" inputmode="decimal" min="${p.emb}" step="${p.emb}" value="${qtdPendente(p)}" data-pend-input="${esc(p.codigo)}" aria-label="Quantidade em ${esc(p.um)}">
+        <button class="btn-icone" data-pend="${esc(p.codigo)}" data-d="1" aria-label="Aumentar">${ICONES.mais}</button>
+      </div>
+      <div class="card__preco">
+        ${k > 0 ? `<span class="de">de <s>${brl(tabela.unit)}</s></span>` : ''}
+        <b>${brl(c.unit)}<small>/${esc(p.um)}</small></b>
+        <span>c/ imp. ${brl(c.unitFinal)} · ${esc(f.nome)}</span>
+      </div>
+      <button class="btn-add" data-add="${esc(p.codigo)}" aria-label="Adicionar ${esc(p.codigo)} ao orçamento">${ICONES.mais}</button>
+    </div>
+  </div>`;
 }
 
 function renderResultados() {
+  const q = estado.busca.trim();
+  if (q.length < 2) {
+    $('#contagem').textContent = 'Digite ao menos 2 caracteres para buscar.';
+    $('#resultados').innerHTML = '';
+    $('#mais').hidden = true;
+    return;
+  }
   const r = filtrar();
-  $('#contagem').textContent = `${r.length} produto${r.length === 1 ? '' : 's'}${estado.busca || estado.classe ? ' encontrados' : ''}`;
-  const lista = r.slice(0, estado.limite);
-  $('#resultados').innerHTML = lista.length
-    ? lista
-        .map((p) => {
-          const c = precoBase(p);
-          const tec = estado.cat.itens?.[p.codigo] ? '<span class="tag">Ficha</span>' : '';
-          const st = c.temSt ? '<span class="tag tag--st">ST</span>' : '';
-          return `<li class="item">
-            <button class="item__abrir" data-abrir="${esc(p.codigo)}">
-              <span class="item__cod">${esc(p.codigo)}${tec}${st}</span>
-              <span class="item__desc">${esc(p.descricao)}</span>
-              <span class="item__meta">Emb. ${numero(p.emb)} ${esc(p.um)} · IPI ${pct(p.ipi / 100)}</span>
-            </button>
-            <div class="item__preco"><b>${brl(c.unit)}</b><span>/${esc(p.um)} · c/ imp. ${brl(c.unitFinal)}</span></div>
-            <button class="btn-icone btn-icone--azul" data-rapido="${esc(p.codigo)}" aria-label="Adicionar ${esc(p.codigo)} ao orçamento">${ICONES.mais}</button>
-          </li>`;
-        })
-        .join('')
-    : `<li class="vazio"><b>Nada encontrado</b>Tente outro código ou parte da descrição.</li>`;
+  $('#contagem').textContent = `${r.length} produto${r.length === 1 ? '' : 's'} encontrado${r.length === 1 ? '' : 's'}`;
+  $('#resultados').innerHTML = r.length
+    ? r.slice(0, estado.limite).map(cardProduto).join('')
+    : `<div class="vazio"><b>Nada encontrado</b>Nenhum produto para “${esc(q)}”.</div>`;
   $('#mais').hidden = r.length <= estado.limite;
 }
 
-// ---------- Detalhe ----------
+function atualizarCard(codigo) {
+  const el = document.querySelector(`[data-card="${CSS.escape(codigo)}"]`);
+  if (el) el.outerHTML = cardProduto(porCodigo.get(codigo));
+}
+
+function adicionar(codigo, qtd, k) {
+  const p = porCodigo.get(codigo);
+  const q = multiploEmb(qtd, p.emb);
+  const it = estado.orc.itens.find((i) => i.codigo === codigo);
+  if (it) {
+    it.qtd += q;
+    if (k != null) it.k = k;
+  } else estado.orc.itens.push({ codigo, qtd: q, k: k ?? estado.orc.faixaPadrao });
+  salvarOrc();
+  renderBarra();
+  return estado.orc.itens.find((i) => i.codigo === codigo);
+}
+
+// ---------- Barra e gaveta do orçamento ----------
+function linhasOrcamento(orc = estado.orc) {
+  return orc.itens
+    .map((i) => {
+      const prod = porCodigo.get(i.codigo);
+      if (!prod) return null;
+      return { prod, qtd: i.qtd, k: i.k, calc: calcularItem(prod, estado.ds.faixas, i.k, i.qtd, estado.cfg) };
+    })
+    .filter(Boolean);
+}
+
+function renderBarra() {
+  const n = estado.orc.itens.length;
+  const barra = $('#barra-orc');
+  barra.hidden = !n || estado.vista === 'painel';
+  document.body.classList.toggle('com-barra', !barra.hidden);
+  if (!n) return;
+  $('#barra-n').textContent = n;
+  $('#barra-total').textContent = brl(totalizar(linhasOrcamento()).total) + ' ▸';
+}
+
+function abrirOrcamento() {
+  $('#folha').dataset.tipo = 'orc';
+  abrirFolha('');
+  renderOrcamento();
+}
+
+function renderOrcamento() {
+  if ($('#folha').dataset.tipo !== 'orc') return;
+  soltarFoco();
+  const linhas = linhasOrcamento();
+  const t = totalizar(linhas);
+  const faixas = estado.ds.faixas;
+  const o = estado.orc;
+  $('#folha-corpo').innerHTML = `
+    <div class="folha__barra">
+      <div><h2 class="folha__titulo">Orçamento${o.numero ? ' nº ' + o.numero : ''}</h2>
+      <span class="mudo">${linhas.length} ite${linhas.length === 1 ? 'm' : 'ns'}${o.cliente ? ' · ' + esc(o.cliente) : ''}</span></div>
+      <button class="btn-icone" data-acao="fechar" aria-label="Fechar">${ICONES.x}</button>
+    </div>
+    ${linhas.length ? '' : '<div class="vazio"><b>Nenhum item</b>Busque produtos e toque em + para adicionar.</div>'}
+    ${linhas
+      .map(
+        (x, i) => `<div class="linha-orc" data-linha="${esc(x.prod.codigo)}">
+      <div class="linha-orc__cab">
+        <span class="num">${i + 1}</span>
+        <button class="item__abrir" data-abrir="${esc(x.prod.codigo)}">
+          <span class="item__desc">${esc(x.prod.descricao)}</span>
+          <span class="item__meta">Cód. ${esc(x.prod.codigo)} · múltiplos de ${numero(x.prod.emb)} ${esc(x.prod.um)}${x.calc.temSt ? ' · <b class="st">ST</b>' : ''}</span>
+        </button>
+        <button class="btn-icone btn-icone--sem-borda" data-remover="${esc(x.prod.codigo)}" aria-label="Remover ${esc(x.prod.codigo)}">${ICONES.x}</button>
+      </div>
+      <div class="segmentos" role="group" aria-label="Faixa de desconto">${faixas
+        .map((f, k) => `<button data-faixa-item="${k}" aria-pressed="${k === x.k}">${esc(f.nome)}</button>`)
+        .join('')}</div>
+      <div class="linha-orc__valores">
+        <div class="qtd qtd--mini">
+          <button class="btn-icone" data-passo="-1" aria-label="Diminuir">${ICONES.menos}</button>
+          <input type="number" inputmode="decimal" min="${x.prod.emb}" step="${x.prod.emb}" value="${x.qtd}" data-qtd-item aria-label="Quantidade em ${esc(x.prod.um)}">
+          <button class="btn-icone" data-passo="1" aria-label="Aumentar">${ICONES.mais}</button>
+          <span class="qtd__un">${esc(x.prod.um)}</span>
+        </div>
+        <div class="linha-orc__total">
+          <b>${brl(x.calc.total)}</b>
+          <span>${brl(x.calc.unit)}/${esc(x.prod.um)} + IPI${x.calc.st ? ' + ST' : ''}</span>
+          <span class="comissao">com. ${pct(x.calc.comissaoPct)} · ${brl(x.calc.comissao)}</span>
+        </div>
+      </div>
+    </div>`
+      )
+      .join('')}
+    ${linhas.length ? `<div class="totais">
+      <dl>
+        <dt>Total s/ impostos</dt><dd>${brl(t.mercadoria)}</dd>
+        <dt>IPI</dt><dd>${brl(t.ipi)}</dd>
+        ${t.st ? `<dt>ICMS-ST</dt><dd>${brl(t.st)}</dd>` : ''}
+        <div class="total" style="display:contents"><dt>Total</dt><dd>${brl(t.total)}</dd></div>
+      </dl>
+      <div class="interno"><span class="rotulo">Comissão (não sai no orçamento)</span> <b>${brl(t.comissao)}</b></div>
+      <p class="rotulo" style="margin:20px 0 8px">Compartilhar</p>
+      <div class="acoes">
+        <button class="btn" data-exportar="texto">Texto</button>
+        <button class="btn" data-exportar="imagem">Imagem</button>
+        <button class="btn" data-exportar="pdf">PDF</button>
+      </div>
+      <div class="acoes acoes--2">
+        <button class="btn btn--contorno" data-acao="salvar-orc">${o.id ? 'Salvar alterações' : 'Salvar no histórico'}</button>
+        <button class="btn btn--contorno" data-acao="novo-orc">Novo orçamento</button>
+      </div>
+      <p class="mudo" style="font-size:13px;margin:12px 0 0">Ao compartilhar, o orçamento é salvo no histórico automaticamente.</p>
+    </div>` : ''}`;
+}
+
+function salvarNoHistorico() {
+  const o = estado.orc;
+  if (!o.itens.length) return null;
+  const linhas = linhasOrcamento();
+  const t = totalizar(linhas);
+  if (!o.id) {
+    o.id = uid();
+    o.numero = ++estado.seq;
+    db.gravar('seq', estado.seq).catch(() => {});
+  }
+  const agora = new Date().toISOString();
+  const reg = {
+    id: o.id,
+    numero: o.numero,
+    clienteId: o.clienteId,
+    cliente: o.cliente,
+    clienteDoc: o.clienteDoc,
+    vendedor: o.vendedor,
+    faixaPadrao: o.faixaPadrao,
+    itens: o.itens.map((i) => ({ ...i })),
+    // Retrato dos valores no momento em que foi salvo (a tabela pode mudar depois).
+    retrato: linhas.map((x) => ({ codigo: x.prod.codigo, descricao: x.prod.descricao, um: x.prod.um, qtd: x.qtd, faixa: estado.ds.faixas[x.k]?.nome, unit: x.calc.unit, total: x.calc.total })),
+    total: t.total,
+    mercadoria: t.mercadoria,
+    tabela: estado.ds.fontes?.pdf?.dataRef || null,
+    criadoEm: estado.historico.find((h) => h.id === o.id)?.criadoEm || agora,
+    atualizadoEm: agora,
+  };
+  estado.historico = [reg, ...estado.historico.filter((h) => h.id !== o.id)];
+  salvarHistorico();
+  salvarOrc();
+  return reg;
+}
+
+async function exportar(tipo) {
+  const linhas = linhasOrcamento();
+  if (!linhas.length) return;
+  salvarNoHistorico();
+  renderOrcamento();
+  const tot = totalizar(linhas);
+  const orc = { ...estado.orc, vendedor: estado.orc.vendedor || estado.cfg.vendedor };
+  try {
+    if (tipo === 'texto') {
+      const r = await compartilharTexto(gerarTexto(orc, linhas, tot, estado.ds));
+      if (r === 'copiado') aviso('Texto copiado — cole no WhatsApp.');
+      return;
+    }
+    aviso(tipo === 'pdf' ? 'Gerando PDF…' : 'Gerando imagem…');
+    const arq = tipo === 'pdf' ? await gerarPdf(orc, linhas, tot, estado.ds) : await gerarImagem(orc, linhas, tot, estado.ds);
+    const r = await compartilharArquivo(arq, `Orçamento Mantac nº ${orc.numero}`);
+    if (r === 'baixado') aviso(`${arq.nome} salvo.`);
+  } catch (e) {
+    console.error(e);
+    aviso('Não foi possível gerar: ' + e.message);
+  }
+}
+
+async function novoOrcamento() {
+  if (estado.orc.itens.length && !estado.orc.id && !(await confirmar('Este orçamento ainda não foi salvo no histórico. Descartar e começar outro?', 'Descartar', true))) return;
+  estado.orc = orcVazio(estado.cfg);
+  estado.pend = {};
+  salvarOrc();
+  fecharFolha();
+  irPara('pedido');
+  aviso('Novo orçamento');
+}
+
+function selecionarCliente(c) {
+  Object.assign(estado.orc, { clienteId: c?.id || null, cliente: c?.nome || '', clienteDoc: c?.doc || '' });
+  salvarOrc();
+  renderClienteCard();
+}
+
+// ---------- Detalhe do produto ----------
 function abrirDetalhe(codigo) {
   const p = porCodigo.get(codigo);
   if (!p) return;
-  const noOrc = estado.orc.itens.find((i) => i.codigo === codigo);
-  estado.detalhe = { codigo, k: noOrc?.k ?? 0, qtd: noOrc?.qtd ?? p.emb };
-  renderDetalhe();
-  $('#folha').hidden = false;
-  document.body.style.overflow = 'hidden';
-  $('#detalhe').scrollTop = 0;
-  $('#detalhe').focus?.();
-}
-
-function fecharDetalhe() {
-  $('#folha').hidden = true;
-  document.body.style.overflow = '';
-  estado.detalhe = null;
-}
-
-function renderDetalhe() {
-  soltarFoco();
-  const d = estado.detalhe;
-  const p = porCodigo.get(d.codigo);
+  $('#folha').dataset.tipo = 'produto';
   const faixas = estado.ds.faixas;
   const lc = linhaCatalogo(p.codigo);
-  const calc = calcularItem(p, faixas, d.k, d.qtd, estado.cfg);
-  const noOrc = estado.orc.itens.some((i) => i.codigo === p.codigo);
-
+  const c0 = calcularItem(p, faixas, 0, 1, estado.cfg);
   const linhasFaixa = faixas
     .map((f, k) => {
       const c = calcularItem(p, faixas, k, 1, estado.cfg);
-      return `<tr data-faixa="${k}" aria-selected="${k === d.k}">
-        <td><b>${esc(f.nome)}</b></td><td>${brl(c.unit)}</td><td><b>${brl(c.unitFinal)}</b></td><td class="com">${pct(f.comissao)}</td></tr>`;
+      return `<tr><td><b>${esc(f.nome)}</b></td><td>${brl(c.unit)}</td><td><b>${brl(c.unitFinal)}</b></td><td class="com">${pct(f.comissao)}</td></tr>`;
     })
     .join('');
-
   let tecnico = '';
   if (lc) {
     const { linha, tab, row } = lc;
@@ -208,41 +491,24 @@ function renderDetalhe() {
       </div>
       ${irmaos.length > 1 ? `<h3 class="subtitulo">Outros itens da linha</h3><div class="irmaos">${irmaos.map((c) => `<button data-abrir="${esc(c)}" aria-current="${c === p.codigo}">${esc(c)}</button>`).join('')}</div>` : ''}`;
   }
-
-  $('#detalhe').innerHTML = `
+  abrirFolha(`
     <div class="folha__barra">
       <button class="btn-icone" data-acao="fechar" aria-label="Fechar">${ICONES.voltar}</button>
       <span class="rotulo">Produto</span>
-      <span style="width:44px"></span>
+      <button class="btn" data-add="${esc(p.codigo)}" data-de-detalhe>+ Orçamento</button>
     </div>
     ${lc?.linha.img ? `<div class="det__foto"><img src="${esc(lc.linha.img)}" alt="${esc(lc.linha.titulo)}" loading="lazy"></div>` : ''}
     <div class="det__cab">
       <span class="item__cod">${esc(p.codigo)}</span>
-      <h2 id="det-titulo">${esc(p.descricao)}</h2>
+      <h2>${esc(p.descricao)}</h2>
       <span class="mudo" style="font-size:14px">${esc(p.classe)}${p.tipo ? ' · ' + esc(p.tipo) : ''}</span>
     </div>
-
     <h3 class="subtitulo">Preço por ${esc(p.um || 'un')}</h3>
     <table class="faixas">
       <thead><tr><th>Faixa</th><th>Unit.</th><th>C/ impostos</th><th>Comissão</th></tr></thead>
       <tbody>${linhasFaixa}</tbody>
     </table>
-    <p class="mudo" style="font-size:13px;margin:8px 0 0">C/ impostos = unitário + IPI ${pct(p.ipi / 100)}${calc.temSt ? ' + ICMS-ST' : ''}. Preço de tabela já inclui ICMS.</p>
-
-    <div class="adicionar">
-      <div class="adicionar__linha">
-        <div class="qtd">
-          <button class="btn-icone" data-qtd="-1" aria-label="Diminuir">${ICONES.menos}</button>
-          <input id="det-qtd" type="number" inputmode="decimal" min="${p.emb}" step="${p.emb}" value="${d.qtd}" aria-label="Quantidade em ${esc(p.um)}">
-          <button class="btn-icone" data-qtd="1" aria-label="Aumentar">${ICONES.mais}</button>
-          <span class="qtd__un">${esc(p.um)}</span>
-        </div>
-        <div class="linha-orc__total"><b>${brl(calc.total)}</b><span>comissão ${brl(calc.comissao)}</span></div>
-      </div>
-      <span class="mudo" style="font-size:13px">Múltiplos de ${numero(p.emb)} ${esc(p.um)} (embalagem).</span>
-      <button class="btn btn--bloco" data-acao="adicionar">${noOrc ? 'Atualizar no orçamento' : 'Adicionar ao orçamento'}</button>
-    </div>
-
+    <p class="mudo" style="font-size:13px;margin:8px 0 0">C/ impostos = unitário + IPI ${pct(p.ipi / 100)}${c0.temSt ? ' + ICMS-ST' : ''}. Preço de tabela já inclui ICMS.</p>
     <h3 class="subtitulo">Dados comerciais</h3>
     <dl class="dados">
       <div><dt>Unidade</dt><dd>${esc(p.um)}</dd></div>
@@ -250,136 +516,212 @@ function renderDetalhe() {
       <div><dt>Peso</dt><dd>${p.peso != null ? numero(p.peso) + ' kg/' + esc(p.um) : '—'}</dd></div>
       <div><dt>NCM</dt><dd>${esc(p.ncm || '—')}</dd></div>
       <div><dt>IPI</dt><dd>${pct(p.ipi / 100)}</dd></div>
-      <div><dt>ICMS-ST</dt><dd>${calc.temSt ? 'Sim' : 'Não'}</dd></div>
+      <div><dt>ICMS-ST</dt><dd>${c0.temSt ? 'Sim' : 'Não'}</dd></div>
       <div><dt>Vigência</dt><dd>${dataBR(p.vigencia)}</dd></div>
       <div><dt>Pagamento</dt><dd>28 DD</dd></div>
     </dl>
-    ${tecnico}`;
+    ${tecnico}`);
 }
 
-function atualizarQtdDetalhe(v) {
-  const p = porCodigo.get(estado.detalhe.codigo);
-  estado.detalhe.qtd = multiploEmb(v, p.emb);
-  renderDetalhe();
-}
-
-function adicionar(codigo, k, qtd) {
-  const p = porCodigo.get(codigo);
-  const i = estado.orc.itens.find((x) => x.codigo === codigo);
-  if (i) Object.assign(i, { k, qtd: multiploEmb(qtd, p.emb) });
-  else estado.orc.itens.push({ codigo, k, qtd: multiploEmb(qtd, p.emb) });
-  salvarOrc();
-  renderBadge();
-}
-
-function renderBadge() {
-  const n = estado.orc.itens.length;
-  $('#badge').hidden = !n;
-  $('#badge').textContent = n;
-}
-
-// ---------- Orçamento ----------
-function linhasOrcamento() {
-  return estado.orc.itens
-    .map((i) => {
-      const prod = porCodigo.get(i.codigo);
-      if (!prod) return null;
-      return { prod, qtd: i.qtd, k: i.k, calc: calcularItem(prod, estado.ds.faixas, i.k, i.qtd, estado.cfg) };
+// ---------- Clientes ----------
+function filtrarClientes(q) {
+  const t = norm(q).split(/\s+/).filter(Boolean);
+  const d = soDigitos(q);
+  return estado.clientes
+    .filter((c) => {
+      const chave = norm(`${c.nome} ${c.fantasia || ''} ${c.cidade || ''}`);
+      return t.every((x) => chave.includes(x)) || (d.length >= 3 && soDigitos(c.doc).includes(d));
     })
-    .filter(Boolean);
+    .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
 }
 
-// Re-renderizar remove o campo focado e dispara "change" no meio do innerHTML;
-// tira o foco antes para o evento acontecer fora da troca.
-function soltarFoco() {
-  const a = document.activeElement;
-  if (a?.matches?.('input[type="number"]')) a.blur();
-}
-
-function renderOrcamento() {
-  soltarFoco();
-  $('#cliente').value = estado.orc.cliente || '';
-  $('#vendedor').value = estado.orc.vendedor || '';
-  const linhas = linhasOrcamento();
-  const faixas = estado.ds.faixas;
-  const fora = estado.orc.itens.length - linhas.length;
-  if (!linhas.length) {
-    $('#itens').innerHTML = `<div class="vazio"><b>Orçamento vazio</b>Busque produtos na Consulta e toque em + para adicionar.<br><br><button class="btn btn--contorno" data-ir="consulta">Ir para consulta</button></div>`;
-    $('#totais').innerHTML = '';
-    return;
-  }
-  $('#itens').innerHTML = `<div class="orc-grade"><div>${linhas
-    .map(
-      (x) => `<div class="linha-orc" data-linha="${esc(x.prod.codigo)}">
-      <div class="linha-orc__cab">
-        <button class="item__abrir" data-abrir="${esc(x.prod.codigo)}">
-          <span class="item__cod">${esc(x.prod.codigo)}${x.calc.temSt ? '<span class="tag tag--st">ST</span>' : ''}</span>
-          <span class="item__desc">${esc(x.prod.descricao)}</span>
-        </button>
-        <button class="btn-icone" data-remover="${esc(x.prod.codigo)}" aria-label="Remover ${esc(x.prod.codigo)}">${ICONES.x}</button>
-      </div>
-      <div class="segmentos" role="group" aria-label="Faixa de desconto">${faixas
-        .map((f, k) => `<button data-faixa-item="${k}" aria-pressed="${k === x.k}">${esc(f.nome)}</button>`)
-        .join('')}</div>
-      <div class="linha-orc__valores">
-        <div class="qtd">
-          <button class="btn-icone" data-passo="-1" aria-label="Diminuir">${ICONES.menos}</button>
-          <input type="number" inputmode="decimal" min="${x.prod.emb}" step="${x.prod.emb}" value="${x.qtd}" data-qtd-item aria-label="Quantidade em ${esc(x.prod.um)}">
-          <button class="btn-icone" data-passo="1" aria-label="Aumentar">${ICONES.mais}</button>
-          <span class="qtd__un">${esc(x.prod.um)}</span>
-        </div>
-        <div class="linha-orc__total">
-          <b>${brl(x.calc.total)}</b>
-          <span>${brl(x.calc.unit)}/${esc(x.prod.um)} + IPI ${brl(x.calc.ipi)}${x.calc.st ? ' + ST ' + brl(x.calc.st) : ''}</span>
-        </div>
-      </div>
-      <span class="comissao">Comissão ${pct(x.calc.comissaoPct)} · ${brl(x.calc.comissao)}</span>
-    </div>`
-    )
-    .join('')}${fora ? `<p class="mudo">${fora} item(ns) não existem mais na tabela atual e foram ocultados.</p>` : ''}</div>
-    <div id="caixa-totais"></div></div>`;
-  renderTotais(linhas);
-}
-
-function renderTotais(linhas = linhasOrcamento()) {
-  const t = totalizar(linhas);
-  const alvo = $('#caixa-totais') || $('#totais');
-  alvo.innerHTML = `<div class="totais">
-    <dl>
-      <dt>Mercadorias</dt><dd>${brl(t.mercadoria)}</dd>
-      <dt>IPI</dt><dd>${brl(t.ipi)}</dd>
-      ${t.st ? `<dt>ICMS-ST</dt><dd>${brl(t.st)}</dd>` : ''}
-      <div class="total" style="display:contents"><dt>Total</dt><dd>${brl(t.total)}</dd></div>
-    </dl>
-    <div class="interno"><span class="rotulo">Comissão (não sai no orçamento)</span><br><b>${brl(t.comissao)}</b></div>
-    <div class="acoes">
-      <button class="btn" data-exportar="texto">Texto</button>
-      <button class="btn" data-exportar="imagem">Imagem</button>
-      <button class="btn" data-exportar="pdf">PDF</button>
-    </div>
-    <button class="btn btn--perigo btn--bloco" style="margin-top:8px" data-acao="limpar">Limpar orçamento</button>
+function itemCliente(c, modo) {
+  const n = estado.historico.filter((h) => h.clienteId === c.id).length;
+  const sel = modo === 'escolher';
+  return `<div class="cliente-item">
+    <button class="item__abrir" ${sel ? `data-escolher="${esc(c.id)}"` : `data-editar-cliente="${esc(c.id)}"`}>
+      <span class="item__desc">${esc(c.nome)}</span>
+      <span class="item__meta">${esc(formatarDoc(c.doc) || 'Sem CNPJ')}${c.cidade ? ' · ' + esc(c.cidade) : ''}${n ? ` · ${n} orçamento${n > 1 ? 's' : ''}` : ''}</span>
+    </button>
+    ${sel ? '' : `<button class="btn btn--contorno btn--mini" data-orcar="${esc(c.id)}">Orçar</button>`}
   </div>`;
 }
 
-async function exportar(tipo) {
-  const linhas = linhasOrcamento();
-  if (!linhas.length) return;
-  const tot = totalizar(linhas);
-  const orc = { ...estado.orc, vendedor: estado.orc.vendedor || estado.cfg.vendedor };
+function renderClientes() {
+  const q = $('#busca-clientes').value;
+  const lista = filtrarClientes(q);
+  $('#lista-clientes').innerHTML = estado.clientes.length
+    ? lista.length
+      ? lista.map((c) => itemCliente(c)).join('')
+      : `<div class="vazio"><b>Nenhum cliente</b>Nada encontrado para “${esc(q)}”.</div>`
+    : `<div class="vazio"><b>Nenhum cliente cadastrado</b>Toque em “+ Novo” para cadastrar.</div>`;
+}
+
+function abrirEscolhaCliente() {
+  const atual = clienteAtual() || (estado.orc.cliente ? { nome: estado.orc.cliente } : null);
+  abrirModal(`
+    <div class="modal__cab"><h2 class="folha__titulo">Selecionar cliente</h2><button class="btn-icone btn-icone--sem-borda" data-acao="fechar-modal" aria-label="Fechar">${ICONES.x}</button></div>
+    <div class="busca"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+      <input id="busca-escolha" type="search" autocomplete="off" placeholder="Nome, CNPJ ou cidade" aria-label="Buscar cliente"></div>
+    <div id="lista-escolha" class="lista-escolha"></div>
+    <div class="botoes" style="margin-top:12px">
+      <button class="btn" data-acao="novo-cliente">+ Novo cliente</button>
+      ${atual ? '<button class="btn btn--contorno" data-acao="limpar-cliente">Limpar seleção</button>' : ''}
+    </div>`);
+  const pintar = () => {
+    const l = filtrarClientes($('#busca-escolha').value).slice(0, 50);
+    $('#lista-escolha').innerHTML = l.length ? l.map((c) => itemCliente(c, 'escolher')).join('') : '<p class="mudo" style="padding:12px 0">Nenhum cliente encontrado.</p>';
+  };
+  $('#busca-escolha').addEventListener('input', pintar);
+  pintar();
+  setTimeout(() => $('#busca-escolha')?.focus(), 50);
+}
+
+function abrirFormCliente(id, depois) {
+  const c = estado.clientes.find((x) => x.id === id) || { nome: '', doc: '', fantasia: '', cidade: '', telefone: '', email: '', obs: '' };
+  const hist = id ? estado.historico.filter((h) => h.clienteId === id) : [];
+  abrirModal(`
+    <div class="modal__cab"><h2 class="folha__titulo">${id ? 'Editar cliente' : 'Novo cliente'}</h2><button class="btn-icone btn-icone--sem-borda" data-acao="fechar-modal" aria-label="Fechar">${ICONES.x}</button></div>
+    <form id="form-cliente" class="form" data-id="${esc(id || '')}" data-depois="${esc(depois || '')}">
+      <label class="campo"><span>CNPJ / CPF</span>
+        <div class="campo__linha"><input name="doc" inputmode="numeric" autocomplete="off" value="${esc(formatarDoc(c.doc))}" placeholder="00.000.000/0000-00">
+        <button type="button" class="btn btn--contorno btn--mini" data-acao="buscar-cnpj">Buscar</button></div>
+        <small>“Buscar” preenche os dados pela Receita (BrasilAPI) — precisa de internet.</small>
+      </label>
+      <label class="campo"><span>Razão social / nome *</span><input name="nome" required autocomplete="off" value="${esc(c.nome)}"></label>
+      <label class="campo"><span>Nome fantasia</span><input name="fantasia" autocomplete="off" value="${esc(c.fantasia || '')}"></label>
+      <label class="campo"><span>Cidade / UF</span><input name="cidade" autocomplete="off" value="${esc(c.cidade || '')}" placeholder="Curitiba/PR"></label>
+      <div class="grade2">
+        <label class="campo"><span>Telefone</span><input name="telefone" inputmode="tel" autocomplete="off" value="${esc(c.telefone || '')}"></label>
+        <label class="campo"><span>E-mail</span><input name="email" type="email" autocomplete="off" value="${esc(c.email || '')}"></label>
+      </div>
+      <label class="campo"><span>Observações</span><textarea name="obs">${esc(c.obs || '')}</textarea></label>
+      <div class="botoes botoes--fim">
+        ${id ? `<button type="button" class="btn btn--perigo" data-excluir-cliente="${esc(id)}">${ICONES.lixo} Excluir</button>` : ''}
+        <button type="submit" class="btn">Salvar</button>
+      </div>
+      ${hist.length ? `<p class="rotulo" style="margin-top:20px">Orçamentos deste cliente</p>${hist.map(itemHistorico).join('')}` : ''}
+    </form>`);
+}
+
+async function buscarCnpj() {
+  const f = $('#form-cliente');
+  const d = soDigitos(f.doc.value);
+  if (d.length !== 14) return aviso('Digite um CNPJ com 14 dígitos.');
+  aviso('Consultando CNPJ…');
   try {
-    if (tipo === 'texto') {
-      const r = await compartilharTexto(gerarTexto(orc, linhas, tot, estado.ds));
-      if (r === 'copiado') aviso('Texto copiado — cole no WhatsApp.');
-      return;
-    }
-    aviso(tipo === 'pdf' ? 'Gerando PDF…' : 'Gerando imagem…');
-    const arq = tipo === 'pdf' ? await gerarPdf(orc, linhas, tot, estado.ds) : await gerarImagem(orc, linhas, tot, estado.ds);
-    const r = await compartilharArquivo(arq, 'Orçamento Mantac');
-    if (r === 'baixado') aviso(`${arq.nome} salvo.`);
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 10000);
+    const r = await fetch(`https://brasilapi.com.br/api/cnpj/v1/${d}`, { signal: ctrl.signal });
+    clearTimeout(t);
+    if (!r.ok) throw new Error(r.status === 404 ? 'CNPJ não encontrado' : 'consulta indisponível');
+    const j = await r.json();
+    f.nome.value = j.razao_social || f.nome.value;
+    f.fantasia.value = j.nome_fantasia || f.fantasia.value;
+    if (j.municipio) f.cidade.value = `${j.municipio.replace(/\b\w/g, (m) => m.toUpperCase()).replace(/\B\w+/g, (m) => m.toLowerCase())}/${j.uf}`;
+    if (j.ddd_telefone_1 && !f.telefone.value) f.telefone.value = j.ddd_telefone_1;
+    if (j.email && !f.email.value) f.email.value = j.email.toLowerCase();
+    f.doc.value = formatarDoc(d);
+    aviso(j.descricao_situacao_cadastral && j.descricao_situacao_cadastral !== 'ATIVA' ? `Atenção: situação ${j.descricao_situacao_cadastral}` : 'Dados preenchidos');
   } catch (e) {
-    console.error(e);
-    aviso('Não foi possível gerar: ' + e.message);
+    aviso('Não foi possível consultar: ' + (e.name === 'AbortError' ? 'tempo esgotado' : e.message));
   }
+}
+
+function salvarCliente(form) {
+  const dados = Object.fromEntries(new FormData(form));
+  dados.nome = dados.nome.trim();
+  if (!dados.nome) return aviso('Informe o nome do cliente.');
+  dados.doc = soDigitos(dados.doc);
+  let id = form.dataset.id;
+  if (dados.doc && estado.clientes.some((c) => c.doc === dados.doc && c.id !== id)) return aviso('Já existe um cliente com esse CNPJ/CPF.');
+  if (id) Object.assign(estado.clientes.find((c) => c.id === id), dados);
+  else {
+    id = uid();
+    estado.clientes.push({ id, ...dados, criadoEm: new Date().toISOString() });
+  }
+  salvarClientes();
+  // Mantém o nome do cliente atualizado no orçamento aberto.
+  if (estado.orc.clienteId === id) selecionarCliente(estado.clientes.find((c) => c.id === id));
+  const depois = form.dataset.depois;
+  fecharModal();
+  if (depois === 'selecionar') {
+    selecionarCliente(estado.clientes.find((c) => c.id === id));
+    irPara('pedido');
+  } else if (estado.vista === 'clientes') renderClientes();
+  aviso('Cliente salvo');
+}
+
+// ---------- Histórico ----------
+function itemHistorico(h) {
+  return `<div class="hist-item">
+    <button class="item__abrir" data-ver-orc="${esc(h.id)}">
+      <span class="item__cod">Nº ${h.numero} · ${dataHora(h.atualizadoEm)}</span>
+      <span class="item__desc">${esc(h.cliente || 'Sem cliente')}</span>
+      <span class="item__meta">${h.itens.length} ite${h.itens.length === 1 ? 'm' : 'ns'} · ${esc(h.vendedor || '')}</span>
+    </button>
+    <b class="hist-item__total">${brl(h.total)}</b>
+  </div>`;
+}
+
+function renderHistorico() {
+  const q = $('#busca-historico').value.trim();
+  const t = norm(q);
+  const lista = estado.historico.filter((h) => !t || norm(`${h.cliente} ${h.numero}`).includes(t) || String(h.numero) === t);
+  $('#lista-historico').innerHTML = estado.historico.length
+    ? lista.length
+      ? lista.map(itemHistorico).join('')
+      : `<div class="vazio"><b>Nada encontrado</b>Nenhum orçamento para “${esc(q)}”.</div>`
+    : `<div class="vazio"><b>Nenhum orçamento salvo</b>Os orçamentos compartilhados ou salvos aparecem aqui.</div>`;
+}
+
+function verOrcamento(id) {
+  const h = estado.historico.find((x) => x.id === id);
+  if (!h) return;
+  $('#folha').dataset.tipo = 'hist';
+  abrirFolha(`
+    <div class="folha__barra">
+      <div><h2 class="folha__titulo">Orçamento nº ${h.numero}</h2><span class="mudo">${dataHora(h.atualizadoEm)} · ${esc(h.vendedor || '')}</span></div>
+      <button class="btn-icone" data-acao="fechar" aria-label="Fechar">${ICONES.x}</button>
+    </div>
+    <div class="cliente-card" style="margin-top:16px"><div class="cliente-card__info"><span class="rotulo">Cliente</span><b class="cliente-card__nome">${esc(h.cliente || 'Sem cliente')}</b><span class="mudo">${esc(formatarDoc(h.clienteDoc) || '')}</span></div></div>
+    <table class="tabela-hist">
+      <thead><tr><th>Item</th><th>Qtd</th><th>Total</th></tr></thead>
+      <tbody>${h.retrato
+        .map((r) => `<tr><td><b>${esc(r.codigo)}</b> ${esc(r.descricao)}<br><span class="mudo">${brl(r.unit)}/${esc(r.um)} · ${esc(r.faixa || '')}</span></td><td>${numero(r.qtd)} ${esc(r.um)}</td><td>${brl(r.total)}</td></tr>`)
+        .join('')}</tbody>
+      <tfoot><tr><td colspan="2">Total com impostos</td><td>${brl(h.total)}</td></tr></tfoot>
+    </table>
+    <p class="mudo" style="font-size:13px">Valores de quando foi salvo${h.tabela ? ` (tabela de ${dataBR(h.tabela)})` : ''}. Ao reabrir, os preços são recalculados pela tabela atual.</p>
+    <div class="acoes acoes--2" style="margin-top:16px">
+      <button class="btn" data-reabrir="${esc(h.id)}">Reabrir e editar</button>
+      <button class="btn btn--contorno" data-duplicar="${esc(h.id)}">Duplicar como novo</button>
+    </div>
+    <button class="btn btn--perigo btn--bloco" style="margin-top:8px" data-excluir-orc="${esc(h.id)}">${ICONES.lixo} Excluir do histórico</button>`);
+}
+
+async function carregarDoHistorico(id, duplicar) {
+  const h = estado.historico.find((x) => x.id === id);
+  if (!h) return;
+  if (estado.orc.itens.length && !estado.orc.id && !(await confirmar('O orçamento aberto não foi salvo. Substituir?', 'Substituir', true))) return;
+  const itens = h.itens.filter((i) => porCodigo.has(i.codigo)).map((i) => ({ ...i }));
+  const fora = h.itens.length - itens.length;
+  estado.orc = {
+    ...orcVazio(estado.cfg),
+    id: duplicar ? null : h.id,
+    numero: duplicar ? null : h.numero,
+    clienteId: h.clienteId,
+    cliente: h.cliente,
+    clienteDoc: h.clienteDoc,
+    vendedor: duplicar ? estado.cfg.vendedor : h.vendedor,
+    faixaPadrao: h.faixaPadrao ?? 0,
+    itens,
+  };
+  salvarOrc();
+  fecharFolha();
+  irPara('pedido');
+  abrirOrcamento();
+  aviso(fora ? `${fora} item(ns) não existem mais na tabela e ficaram de fora` : duplicar ? 'Cópia aberta como novo orçamento' : `Orçamento nº ${h.numero} reaberto`);
 }
 
 // ---------- Painel ----------
@@ -445,10 +787,19 @@ function renderPainel() {
     </div>
 
     <div class="cartao">
-      <h3>Vendedor padrão</h3>
-      <label class="campo"><span>Nome</span><input type="text" data-cfg="vendedor" value="${esc(estado.cfg.vendedor)}"></label>
+      <h3>Vendedor</h3>
+      <label class="campo"><span>Nome no orçamento</span><input type="text" data-cfg="vendedor" value="${esc(estado.cfg.vendedor)}"></label>
     </div>
-    <p class="mudo" style="font-size:13px">Mantac Pedidos · dados salvos só neste aparelho · funciona offline.</p>`;
+
+    <div class="cartao">
+      <h3>Backup dos dados</h3>
+      <p>Clientes, histórico (${estado.historico.length} orçamentos) e configurações ficam só neste aparelho. Exporte um backup de vez em quando ou para passar para outro aparelho.</p>
+      <div class="botoes">
+        <button class="btn btn--contorno" data-acao="exportar-backup">Exportar backup</button>
+        <label class="btn btn--contorno">Importar backup<input type="file" id="arquivo-backup" accept=".json,application/json" hidden></label>
+      </div>
+    </div>
+    <p class="mudo" style="font-size:13px">Mantac Pedidos · ${estado.clientes.length} clientes · dados salvos só neste aparelho · funciona offline.</p>`;
 }
 
 async function lerArquivo(file) {
@@ -478,6 +829,37 @@ async function lerArquivo(file) {
   renderPainel();
 }
 
+function exportarBackup() {
+  const dados = { app: 'mantac-pedidos', versao: 1, em: new Date().toISOString(), cfg: estado.cfg, clientes: estado.clientes, historico: estado.historico, seq: estado.seq };
+  const blob = new Blob([JSON.stringify(dados)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `mantac-backup-${new Date().toISOString().slice(0, 10)}.json`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+
+async function importarBackup(file) {
+  try {
+    const d = JSON.parse(await file.text());
+    if (d.app !== 'mantac-pedidos') throw new Error('arquivo não é um backup do Mantac Pedidos');
+    if (!(await confirmar(`Juntar ${d.clientes?.length || 0} clientes e ${d.historico?.length || 0} orçamentos do backup com os dados deste aparelho?`, 'Importar'))) return;
+    const cli = new Map(estado.clientes.map((c) => [c.id, c]));
+    for (const c of d.clientes || []) cli.set(c.id, c);
+    const his = new Map(estado.historico.map((h) => [h.id, h]));
+    for (const h of d.historico || []) if (!his.has(h.id) || his.get(h.id).atualizadoEm < h.atualizadoEm) his.set(h.id, h);
+    estado.clientes = [...cli.values()];
+    estado.historico = [...his.values()].sort((a, b) => (b.atualizadoEm || '').localeCompare(a.atualizadoEm || ''));
+    estado.seq = Math.max(estado.seq, d.seq || 0, ...estado.historico.map((h) => h.numero || 0));
+    if (d.cfg) estado.cfg = { ...estado.cfg, ...d.cfg, st: { ...estado.cfg.st, ...d.cfg.st } };
+    await Promise.all([salvarClientes(), salvarHistorico(), salvarCfg(), db.gravar('seq', estado.seq)]);
+    renderPainel();
+    aviso('Backup importado');
+  } catch (e) {
+    aviso('Erro no backup: ' + e.message);
+  }
+}
+
 // ---------- Eventos ----------
 function ligarEventos() {
   let t;
@@ -485,102 +867,167 @@ function ligarEventos() {
     clearTimeout(t);
     t = setTimeout(() => {
       estado.busca = e.target.value;
-      estado.limite = 60;
+      estado.limite = 30;
       renderResultados();
     }, 120);
   });
+  $('#busca-clientes').addEventListener('input', renderClientes);
+  $('#busca-historico').addEventListener('input', renderHistorico);
   $('#mais').addEventListener('click', () => {
-    estado.limite += 60;
+    estado.limite += 30;
     renderResultados();
   });
 
-  document.addEventListener('click', (e) => {
-    const el = e.target.closest('[data-ir],[data-classe],[data-abrir],[data-rapido],[data-acao],[data-faixa],[data-qtd],[data-remover],[data-faixa-item],[data-passo],[data-exportar]');
+  document.addEventListener('submit', (e) => {
+    if (e.target.id === 'form-cliente') {
+      e.preventDefault();
+      salvarCliente(e.target);
+    }
+  });
+
+  document.addEventListener('click', async (e) => {
+    const el = e.target.closest(
+      '[data-ir],[data-acao],[data-abrir],[data-add],[data-pend],[data-faixa-padrao],[data-faixa-item],[data-passo],[data-remover],[data-exportar],[data-escolher],[data-editar-cliente],[data-orcar],[data-excluir-cliente],[data-ver-orc],[data-reabrir],[data-duplicar],[data-excluir-orc],[data-historico-cliente]'
+    );
     if (!el) return;
-    const ds = el.dataset;
-    if (ds.ir) return irPara(ds.ir);
-    if (ds.classe !== undefined) {
-      estado.classe = ds.classe;
-      estado.limite = 60;
-      renderClasses();
-      renderResultados();
-      return;
+    const d = el.dataset;
+    if (d.ir) {
+      fecharFolha();
+      return irPara(d.ir);
     }
-    if (ds.abrir) return abrirDetalhe(ds.abrir);
-    if (ds.rapido) {
-      const p = porCodigo.get(ds.rapido);
-      const ja = estado.orc.itens.find((i) => i.codigo === p.codigo);
-      adicionar(p.codigo, ja?.k ?? 0, (ja?.qtd ?? 0) + p.emb);
-      const q = estado.orc.itens.find((i) => i.codigo === p.codigo).qtd;
-      return aviso(`${p.codigo} · ${numero(q)} ${p.um} no orçamento`);
+    if (d.abrir) return abrirDetalhe(d.abrir);
+    if (d.add) {
+      const p = porCodigo.get(d.add);
+      const it = adicionar(p.codigo, d.deDetalhe !== undefined ? p.emb : qtdPendente(p));
+      delete estado.pend[p.codigo];
+      if (d.deDetalhe !== undefined) fecharFolha();
+      atualizarCard(p.codigo);
+      return aviso(`${p.codigo} · ${numero(it.qtd)} ${p.um} no orçamento`);
     }
-    if (ds.faixa !== undefined) {
-      estado.detalhe.k = Number(ds.faixa);
-      return renderDetalhe();
+    if (d.pend) {
+      const p = porCodigo.get(d.pend);
+      estado.pend[p.codigo] = Math.max(p.emb, qtdPendente(p) + Number(d.d) * p.emb);
+      return atualizarCard(p.codigo);
     }
-    if (ds.qtd) {
-      const p = porCodigo.get(estado.detalhe.codigo);
-      return atualizarQtdDetalhe(Math.max(p.emb, estado.detalhe.qtd + Number(ds.qtd) * p.emb));
+    if (d.faixaPadrao !== undefined) {
+      estado.orc.faixaPadrao = Number(d.faixaPadrao);
+      salvarOrc();
+      renderFaixaPadrao();
+      return renderResultados();
     }
     const linha = el.closest('[data-linha]');
-    if (ds.remover) {
-      estado.orc.itens = estado.orc.itens.filter((i) => i.codigo !== ds.remover);
+    if (d.remover) {
+      estado.orc.itens = estado.orc.itens.filter((i) => i.codigo !== d.remover);
       salvarOrc();
-      renderBadge();
-      return renderOrcamento();
+      renderBarra();
+      renderOrcamento();
+      return atualizarCard(d.remover);
     }
-    if (linha && (ds.faixaItem !== undefined || ds.passo)) {
+    if (linha && (d.faixaItem !== undefined || d.passo)) {
       const it = estado.orc.itens.find((i) => i.codigo === linha.dataset.linha);
       const p = porCodigo.get(it.codigo);
-      if (ds.faixaItem !== undefined) it.k = Number(ds.faixaItem);
-      else it.qtd = Math.max(p.emb, it.qtd + Number(ds.passo) * p.emb);
+      if (d.faixaItem !== undefined) it.k = Number(d.faixaItem);
+      else it.qtd = Math.max(p.emb, it.qtd + Number(d.passo) * p.emb);
       salvarOrc();
+      renderBarra();
       return renderOrcamento();
     }
-    if (ds.exportar) return exportar(ds.exportar);
-    switch (ds.acao) {
+    if (d.exportar) return exportar(d.exportar);
+    if (d.escolher) {
+      selecionarCliente(estado.clientes.find((c) => c.id === d.escolher));
+      return fecharModal();
+    }
+    if (d.editarCliente) return abrirFormCliente(d.editarCliente);
+    if (d.orcar) {
+      selecionarCliente(estado.clientes.find((c) => c.id === d.orcar));
+      irPara('pedido');
+      return aviso('Cliente selecionado no pedido');
+    }
+    if (d.excluirCliente) {
+      if (!(await confirmar('Excluir este cliente? Os orçamentos do histórico continuam salvos.', 'Excluir', true))) return;
+      estado.clientes = estado.clientes.filter((c) => c.id !== d.excluirCliente);
+      salvarClientes();
+      if (estado.orc.clienteId === d.excluirCliente) estado.orc.clienteId = null;
+      renderClientes();
+      return aviso('Cliente excluído');
+    }
+    if (d.historicoCliente) {
+      $('#busca-historico').value = estado.clientes.find((c) => c.id === d.historicoCliente)?.nome || '';
+      return irPara('historico');
+    }
+    if (d.verOrc) {
+      fecharModal();
+      return verOrcamento(d.verOrc);
+    }
+    if (d.reabrir) return carregarDoHistorico(d.reabrir, false);
+    if (d.duplicar) return carregarDoHistorico(d.duplicar, true);
+    if (d.excluirOrc) {
+      if (!(await confirmar('Excluir este orçamento do histórico?', 'Excluir', true))) return;
+      estado.historico = estado.historico.filter((h) => h.id !== d.excluirOrc);
+      salvarHistorico();
+      if (estado.orc.id === d.excluirOrc) Object.assign(estado.orc, { id: null, numero: null });
+      fecharFolha();
+      renderHistorico();
+      return aviso('Orçamento excluído');
+    }
+    switch (d.acao) {
       case 'fechar':
-        return fecharDetalhe();
-      case 'adicionar': {
-        const d = estado.detalhe;
-        const v = $('#det-qtd').value;
-        adicionar(d.codigo, d.k, v);
-        fecharDetalhe();
-        return aviso('Adicionado ao orçamento');
+        fecharFolha();
+        if (estado.vista === 'pedido') renderResultados();
+        return;
+      case 'fechar-modal':
+        return fecharModal();
+      case 'abrir-orc':
+        return abrirOrcamento();
+      case 'escolher-cliente':
+        return abrirEscolhaCliente();
+      case 'limpar-cliente':
+        selecionarCliente(null);
+        return fecharModal();
+      case 'novo-cliente':
+        return abrirFormCliente(null, estado.vista === 'pedido' ? 'selecionar' : '');
+      case 'buscar-cnpj':
+        return buscarCnpj();
+      case 'salvar-orc': {
+        const r = salvarNoHistorico();
+        renderOrcamento();
+        return aviso(`Orçamento nº ${r.numero} salvo no histórico`);
       }
-      case 'limpar':
-        if (!confirm('Limpar todos os itens do orçamento?')) return;
-        estado.orc = { cliente: '', vendedor: estado.cfg.vendedor, itens: [] };
-        salvarOrc();
-        renderBadge();
-        return renderOrcamento();
+      case 'novo-orc':
+        return novoOrcamento();
       case 'confirmar':
         estado.ds = estado.previa.ds;
         estado.previa = null;
         db.gravar('ds', estado.ds);
         indexar();
-        renderTudo();
+        renderTopo();
         renderPainel();
         return aviso('Tabela atualizada');
       case 'descartar':
         estado.previa = null;
         return renderPainel();
       case 'restaurar':
-        if (!confirm('Descartar as importações feitas neste aparelho e voltar à tabela publicada?')) return;
-        return carregarEmbutido().then(async (ds) => {
-          estado.ds = ds;
-          await db.apagar('ds');
-          indexar();
-          renderTudo();
-          renderPainel();
-          aviso('Tabela publicada restaurada');
-        });
+        if (!(await confirmar('Descartar as importações feitas neste aparelho e voltar à tabela publicada?', 'Restaurar', true))) return;
+        estado.ds = await carregarEmbutido();
+        await db.apagar('ds');
+        indexar();
+        renderTopo();
+        renderPainel();
+        return aviso('Tabela publicada restaurada');
+      case 'exportar-backup':
+        return exportarBackup();
     }
   });
 
   document.addEventListener('change', (e) => {
     const el = e.target;
-    if (el.id === 'det-qtd') return atualizarQtdDetalhe(el.value);
+    if (el.dataset.pendInput) {
+      const p = porCodigo.get(el.dataset.pendInput);
+      const q = multiploEmb(el.value, p.emb);
+      if (q !== Number(el.value)) aviso(`Ajustado para ${numero(q)} ${p.um} (múltiplo de ${numero(p.emb)})`);
+      estado.pend[p.codigo] = q;
+      return atualizarCard(p.codigo);
+    }
     if (el.matches('[data-qtd-item]')) {
       const it = estado.orc.itens.find((i) => i.codigo === el.closest('[data-linha]').dataset.linha);
       const p = porCodigo.get(it.codigo);
@@ -588,9 +1035,11 @@ function ligarEventos() {
       if (q !== Number(el.value)) aviso(`Ajustado para ${numero(q)} ${p.um} (múltiplo de ${numero(p.emb)})`);
       it.qtd = q;
       salvarOrc();
+      renderBarra();
       return renderOrcamento();
     }
     if (el.id === 'arquivo' && el.files[0]) return lerArquivo(el.files[0]);
+    if (el.id === 'arquivo-backup' && el.files[0]) return importarBackup(el.files[0]);
     const st = estado.cfg.st;
     if (el.dataset.st) st[el.dataset.st] = Number(el.value) || 0;
     else if (el.dataset.mva !== undefined) {
@@ -602,17 +1051,7 @@ function ligarEventos() {
       if (!estado.orc.itens.length) estado.orc.vendedor = estado.cfg.vendedor;
     } else return;
     salvarCfg();
-    renderResultados();
     aviso('Configuração salva');
-  });
-
-  $('#cliente').addEventListener('input', (e) => {
-    estado.orc.cliente = e.target.value;
-    salvarOrc();
-  });
-  $('#vendedor').addEventListener('input', (e) => {
-    estado.orc.vendedor = e.target.value;
-    salvarOrc();
   });
 
   // Arrastar arquivo no painel.
@@ -633,7 +1072,9 @@ function ligarEventos() {
   });
 
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && !$('#folha').hidden) fecharDetalhe();
+    if (e.key !== 'Escape') return;
+    if (!$('#modal').hidden) fecharModal();
+    else if (!$('#folha').hidden) fecharFolha();
   });
   window.addEventListener('hashchange', () => irPara(location.hash.slice(1), false));
 }

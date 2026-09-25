@@ -4,8 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Mantac Pedidos</title>
-  <meta name="description" content="Consulta de preços, catálogo técnico e orçamentos Mantac — Tabela 44 (PR).">
-  <meta name="theme-color" content="#004AFF">
+  <meta name="description" content="Pedidos e orçamentos Mantac — Tabela 44 (PR), catálogo técnico, clientes e histórico.">
+  <meta name="theme-color" content="#ffffff">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icons/favicon-32.png" sizes="32x32">
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
@@ -18,60 +18,81 @@
   <header class="topo">
     <img class="topo__logo" src="img/logo-wordmark.png" alt="Mantac" width="120" height="25">
     <span class="topo__info" id="topo-info"></span>
+    <button class="btn-icone btn-icone--sem-borda" data-ir="painel" aria-label="Painel">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+    </button>
   </header>
 
+  <nav class="abas" aria-label="Seções">
+    <button class="aba" data-ir="pedido">Pedido</button>
+    <button class="aba" data-ir="clientes">Clientes</button>
+    <button class="aba" data-ir="historico">Histórico</button>
+  </nav>
+
   <main id="app">
-    <!-- CONSULTA -->
-    <section class="vista" id="v-consulta" data-vista="consulta">
-      <h1 class="titulo">Consulta de preços</h1>
-      <div class="busca">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
-        <input id="busca" type="search" inputmode="search" autocomplete="off" placeholder="Código, descrição, bitola…" aria-label="Buscar produto">
+    <!-- PEDIDO -->
+    <section class="vista" data-vista="pedido">
+      <div id="cliente-card"></div>
+
+      <div class="campo" style="margin-top:20px">
+        <span>Faixa de desconto padrão</span>
+        <div class="segmentos segmentos--faixa" id="faixa-padrao" role="group" aria-label="Faixa de desconto padrão"></div>
       </div>
-      <nav class="abas-classe" id="classes" aria-label="Filtrar por linha"></nav>
-      <p class="contagem" id="contagem"></p>
-      <ul class="lista" id="resultados"></ul>
+
+      <div class="busca" style="margin-top:20px">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+        <input id="busca" type="search" inputmode="search" autocomplete="off" placeholder="Código ou nome do produto" aria-label="Buscar produto">
+      </div>
+      <p class="contagem" id="contagem">Digite ao menos 2 caracteres para buscar.</p>
+      <div id="resultados"></div>
       <button class="btn btn--contorno btn--bloco" id="mais" hidden>Mostrar mais</button>
     </section>
 
-    <!-- ORÇAMENTO -->
-    <section class="vista" id="v-orcamento" data-vista="orcamento" hidden>
-      <h1 class="titulo">Orçamento</h1>
-      <div class="campos">
-        <label class="campo"><span>Cliente</span><input id="cliente" type="text" autocomplete="off" placeholder="Nome do cliente"></label>
-        <label class="campo"><span>Vendedor</span><input id="vendedor" type="text" autocomplete="off"></label>
+    <!-- CLIENTES -->
+    <section class="vista" data-vista="clientes" hidden>
+      <div class="cab-vista">
+        <h1 class="titulo">Clientes</h1>
+        <button class="btn" data-acao="novo-cliente">+ Novo</button>
       </div>
-      <div id="itens"></div>
-      <div id="totais"></div>
+      <div class="busca">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+        <input id="busca-clientes" type="search" autocomplete="off" placeholder="Nome, CNPJ ou cidade" aria-label="Buscar cliente">
+      </div>
+      <div id="lista-clientes"></div>
+    </section>
+
+    <!-- HISTÓRICO -->
+    <section class="vista" data-vista="historico" hidden>
+      <h1 class="titulo">Histórico</h1>
+      <div class="busca">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+        <input id="busca-historico" type="search" autocomplete="off" placeholder="Cliente ou nº do orçamento" aria-label="Buscar orçamento">
+      </div>
+      <div id="lista-historico"></div>
     </section>
 
     <!-- PAINEL -->
-    <section class="vista" id="v-painel" data-vista="painel" hidden>
+    <section class="vista" data-vista="painel" hidden>
       <h1 class="titulo">Painel</h1>
       <div id="painel"></div>
     </section>
   </main>
 
-  <!-- Detalhe do produto -->
+  <!-- Barra do orçamento -->
+  <button class="barra-orc" id="barra-orc" data-acao="abrir-orc" hidden>
+    <span><b class="barra-orc__n" id="barra-n">0</b> no orçamento</span>
+    <span id="barra-total">R$ 0,00 ▸</span>
+  </button>
+
+  <!-- Gavetas / modais -->
   <div class="folha" id="folha" hidden>
     <div class="folha__fundo" data-acao="fechar"></div>
-    <article class="folha__corpo" role="dialog" aria-modal="true" aria-labelledby="det-titulo" id="detalhe"></article>
+    <article class="folha__corpo" role="dialog" aria-modal="true" id="folha-corpo" tabindex="-1"></article>
   </div>
-
-  <nav class="abas" aria-label="Navegação">
-    <button class="aba" data-ir="consulta" aria-current="page">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
-      <span>Consulta</span>
-    </button>
-    <button class="aba" data-ir="orcamento">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5M9 13h7M9 17h7"/></svg>
-      <span>Orçamento</span><b class="aba__badge" id="badge" hidden></b>
-    </button>
-    <button class="aba" data-ir="painel">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="9" cy="6" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="8" cy="18" r="2"/></svg>
-      <span>Painel</span>
-    </button>
-  </nav>
+  <div class="modal" id="modal" hidden>
+    <div class="folha__fundo" data-acao="fechar-modal"></div>
+    <div class="modal__corpo" role="dialog" aria-modal="true" id="modal-corpo" tabindex="-1"></div>
+  </div>
 
   <div class="aviso" id="aviso" role="status" aria-live="polite"></div>
 

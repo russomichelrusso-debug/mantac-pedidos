@@ -4,13 +4,29 @@ PWA para consulta de preços da **Tabela 44 (Atacado Especial)**, catálogo téc
 
 ## Funções
 
-- **Consulta**: busca por código, descrição, bitola ou linha, com filtro por classe. Cada produto mostra as 4 faixas de preço (Tabela, −10%, 2×10, 3×10), o preço com impostos, a comissão, os dados comerciais (NCM, IPI, embalagem, peso, vigência) e a ficha técnica do Catálogo 2025 (medidas, pressões, aplicação, cores e foto).
-- **Orçamento**: desconto escolhido por item e quantidade sempre em múltiplos da embalagem. Mostra os totais de mercadorias, IPI e ICMS-ST, além da comissão (visível só no app).
-- **Compartilhar**: exporta como **Texto** (WhatsApp), **Imagem** (PNG) ou **PDF**, com a logo, o cliente, o vendedor e a data. A comissão e a faixa de desconto não aparecem no material do cliente.
-- **Painel** (sem senha):
-  - importa a Lista de Preços em **PDF (Prosyst)** e/ou a **planilha XLS/XLSX** de descontos, com uma prévia antes de aplicar;
-  - configura o ICMS-ST por NCM (MVA, alíquota interna PR e alíquota interestadual) e os códigos de exceção;
-  - define o vendedor padrão.
+O uso segue o modelo do app de vendas da Cortag (appdb), sem levantamento de estoque:
+
+- **Pedido**
+  - Cartão do cliente: selecionar, trocar ou cadastrar um cliente.
+  - **Faixa de desconto padrão** (Tabela, −10%, 2×10, 3×10), com a comissão de cada faixa.
+  - Busca por código ou nome a partir de 2 caracteres. Cada resultado aparece num cartão com quantidade (em múltiplos da embalagem), preço na faixa, preço com impostos e botão **+**.
+  - O ⓘ abre a ficha técnica do Catálogo 2025: medidas, pressões, aplicação, cores e foto.
+- **Barra do orçamento**: fica fixa embaixo e abre a gaveta do orçamento.
+  - Na gaveta dá para mudar a faixa e a quantidade de cada item.
+  - Os totais separam mercadorias, IPI e ICMS-ST. A comissão aparece só no app.
+  - Compartilha como **Texto** (WhatsApp), **Imagem** ou **PDF**, com o nº do orçamento. Ao compartilhar, o orçamento é salvo no histórico.
+- **Clientes**
+  - Cadastro com nome, CNPJ/CPF, fantasia, cidade, telefone, e-mail e observações.
+  - O botão "Buscar" preenche os dados pelo CNPJ (BrasilAPI, precisa de internet).
+  - "Orçar" já seleciona o cliente no pedido.
+- **Histórico**: orçamentos salvos com nº, data, cliente e total. Cada um pode ser reaberto e editado, duplicado como novo ou excluído.
+- **Painel** (engrenagem, sem senha):
+  - importa o PDF do Prosyst ou o XLS/XLSX de descontos, com prévia antes de aplicar;
+  - configura o ICMS-ST por NCM;
+  - define o vendedor;
+  - faz **backup** (exportar e importar JSON) de clientes, histórico e configurações.
+
+Tudo fica salvo **só no aparelho** (IndexedDB), sem servidor. Para passar os dados para outro aparelho, use o backup.
 
 ## Cálculo
 
