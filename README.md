@@ -35,10 +35,15 @@ unitário   = preço Tabela 44 (já com ICMS) × fator da faixa (1 · 0,9 · 0,8
              ou o preço digitado na planilha, quando existir (42 conexões PE/PP no 3×10)
 mercadoria = unitário × quantidade
 IPI        = mercadoria × % IPI do item
-ICMS-ST    = (mercadoria + IPI) × (1 + MVA) × ICMS interno PR − mercadoria × ICMS interestadual
-             (só para NCMs com MVA preenchida no Painel; desligado por padrão)
+ICMS-ST    = (mercadoria + IPI*) × (1 + MVA do item) × ICMS interno PR − mercadoria × ICMS interestadual (12%)
 comissão   = mercadoria × % da faixa (8% · 8% · 8% · 5%)
 ```
+
+**ICMS-ST por produto.** A regra vem da tabela "PR ST 2025 — Mantac Industrialização" (`data/st-pr.json`): cada código tem ST ou não, com MVA (39%, 50%, 58% ou 71,78%), ICMS interno (19,5%) e CEST. O NCM sozinho não decide. Dentro do 39.17.3229, por exemplo, há itens com MVA 39%, com MVA 71,78% e sem ST.
+
+- \* **IPI na base**: ligado por padrão, que é a regra legal. Desligado, o cálculo fica igual à coluna "%ST" da tabela da Mantac, que não considera IPI. A opção fica no Painel.
+- **Produtos fora da tabela de ST**: 66 produtos da Tabela 44 não aparecem na tabela de ST e ficam sem ST. Se algum deles tiver ST, dá para informar a MVA por NCM no Painel; essa regra vale só para esses produtos.
+- **Atualização**: a tabela de ST pode ser trocada pelo Painel, enviando o PDF novo. O app reconhece sozinho se o PDF é a lista de preços ou a tabela de ST.
 
 ## Atualizar os dados publicados
 
@@ -46,7 +51,7 @@ Os arquivos originais ficam em `tools/fontes/`, que **não é versionado**, porq
 
 ```bash
 npm install
-npm run dados       # tools/fontes/tabela44.pdf + tabela44.xls  -> data/tabela44.json
+npm run dados       # tools/fontes/tabela44.pdf + tabela44.xls (+ st-pr.pdf) -> data/tabela44.json (+ data/st-pr.json)
 npm run catalogo    # tools/fontes/catalogo2025.pdf             -> data/catalogo.json + img/cat/  (pip install pymupdf)
 npm run sw          # regenera sw.js (lista offline + versão) — rode sempre antes de publicar
 ```

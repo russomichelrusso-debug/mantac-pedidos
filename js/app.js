@@ -1,5 +1,5 @@
 import * as db from './db.js';
-import { CONFIG_PADRAO, calcularItem, totalizar, multiploEmb, brl, numero, pct } from './precos.js';
+import { CONFIG_PADRAO, calcularItem, totalizar, multiploEmb, situacaoSt, regraSt, brl, numero, pct } from './precos.js';
 import { aplicarPdf, aplicarXls, comparar } from './dados.js';
 import { gerarTexto, gerarImagem, gerarPdf, compartilharArquivo, compartilharTexto } from './compartilhar.js';
 
@@ -33,6 +33,7 @@ const orcVazio = (cfg) => ({ id: null, numero: null, clienteId: null, cliente: '
 
 const estado = {
   ds: null,
+  st: null, // tabela de ICMS-ST por código ({ arquivo, porCodigo, origem })
   cat: { linhas: [], itens: {} },
   cfg: structuredClone(CONFIG_PADRAO),
   orc: null,
@@ -46,9 +47,17 @@ const estado = {
   vista: 'pedido',
 };
 let indice = [];
+// Configuração de cálculo: preferências salvas + tabela de ST por código.
+const ctx = () => ({ ...estado.cfg, tabelaSt: estado.st });
 let porCodigo = new Map();
 
 // ---------- Carga ----------
+async function carregarStEmbutido() {
+  const st = await (await fetch('data/st-pr.json', { cache: 'no-cache' })).json();
+  st.origem = 'embutido';
+  return st;
+}
+
 async function carregarEmbutido() {
   const ds = await (await fetch('data/tabela44.json', { cache: 'no-cache' })).json();
   ds.origem = 'embutido';
@@ -56,7 +65,7 @@ async function carregarEmbutido() {
 }
 
 async function iniciar() {
-  const [cfg, orc, ds, clientes, historico, seq] = await Promise.all(['cfg', 'orc', 'ds', 'clientes', 'historico', 'seq'].map((k) => db.ler(k).catch(() => undefined)));
+  const [cfg, orc, ds, clientes, historico, seq, st] = await Promise.all(['cfg', 'orc', 'ds', 'clientes', 'historico', 'seq', 'st'].map((k) => db.ler(k).catch(() => undefined)));
   if (cfg) estado.cfg = { ...structuredClone(CONFIG_PADRAO), ...cfg, st: { ...CONFIG_PADRAO.st, ...cfg.st } };
   estado.orc = { ...orcVazio(estado.cfg), ...(orc || {}) };
   estado.clientes = clientes || [];
@@ -68,6 +77,14 @@ async function iniciar() {
       estado.ds = await carregarEmbutido();
     } catch {
       estado.ds = ds;
+    }
+  }
+  if (st && st.origem === 'upload') estado.st = st;
+  else {
+    try {
+      estado.st = await carregarStEmbutido();
+    } catch {
+      estado.st = st || null;
     }
   }
   try {
@@ -232,8 +249,8 @@ const qtdPendente = (p) => estado.pend[p.codigo] ?? p.emb;
 function cardProduto(p) {
   const k = estado.orc.faixaPadrao;
   const f = estado.ds.faixas[k];
-  const c = calcularItem(p, estado.ds.faixas, k, 1, estado.cfg);
-  const tabela = calcularItem(p, estado.ds.faixas, 0, 1, estado.cfg);
+  const c = calcularItem(p, estado.ds.faixas, k, 1, ctx());
+  const tabela = calcularItem(p, estado.ds.faixas, 0, 1, ctx());
   const noOrc = estado.orc.itens.find((i) => i.codigo === p.codigo);
   const tec = estado.cat.itens?.[p.codigo];
   return `<div class="card" data-card="${esc(p.codigo)}">
@@ -300,7 +317,7 @@ function linhasOrcamento(orc = estado.orc) {
     .map((i) => {
       const prod = porCodigo.get(i.codigo);
       if (!prod) return null;
-      return { prod, qtd: i.qtd, k: i.k, calc: calcularItem(prod, estado.ds.faixas, i.k, i.qtd, estado.cfg) };
+      return { prod, qtd: i.qtd, k: i.k, calc: calcularItem(prod, estado.ds.faixas, i.k, i.qtd, ctx()) };
     })
     .filter(Boolean);
 }
@@ -461,16 +478,22 @@ function selecionarCliente(c) {
 }
 
 // ---------- Detalhe do produto ----------
+function textoSt(p) {
+  const sit = situacaoSt(p, ctx());
+  if (sit === 'sim') return `Sim · MVA ${pct(regraSt(p, ctx()).mva / 100)}`;
+  return sit === 'indefinido' ? 'Não informado' : 'Não';
+}
+
 function abrirDetalhe(codigo) {
   const p = porCodigo.get(codigo);
   if (!p) return;
   $('#folha').dataset.tipo = 'produto';
   const faixas = estado.ds.faixas;
   const lc = linhaCatalogo(p.codigo);
-  const c0 = calcularItem(p, faixas, 0, 1, estado.cfg);
+  const c0 = calcularItem(p, faixas, 0, 1, ctx());
   const linhasFaixa = faixas
     .map((f, k) => {
-      const c = calcularItem(p, faixas, k, 1, estado.cfg);
+      const c = calcularItem(p, faixas, k, 1, ctx());
       return `<tr><td><b>${esc(f.nome)}</b></td><td>${brl(c.unit)}</td><td><b>${brl(c.unitFinal)}</b></td><td class="com">${pct(f.comissao)}</td></tr>`;
     })
     .join('');
@@ -516,7 +539,8 @@ function abrirDetalhe(codigo) {
       <div><dt>Peso</dt><dd>${p.peso != null ? numero(p.peso) + ' kg/' + esc(p.um) : '—'}</dd></div>
       <div><dt>NCM</dt><dd>${esc(p.ncm || '—')}</dd></div>
       <div><dt>IPI</dt><dd>${pct(p.ipi / 100)}</dd></div>
-      <div><dt>ICMS-ST</dt><dd>${c0.temSt ? 'Sim' : 'Não'}</dd></div>
+      <div><dt>ICMS-ST</dt><dd>${textoSt(p)}</dd></div>
+      ${regraSt(p, ctx())?.cest ? `<div><dt>CEST</dt><dd>${esc(regraSt(p, ctx()).cest)}</dd></div>` : ''}
       <div><dt>Vigência</dt><dd>${dataBR(p.vigencia)}</dd></div>
       <div><dt>Pagamento</dt><dd>28 DD</dd></div>
     </dl>
@@ -729,9 +753,20 @@ function renderPainel() {
   const ds = estado.ds;
   const f = ds.fontes || {};
   const st = estado.cfg.st;
-  const ncms = new Map();
-  for (const p of ds.produtos) if (p.ncm) ncms.set(p.ncm, (ncms.get(p.ncm) || 0) + 1);
   const pv = estado.previa;
+  const tab = estado.st?.porCodigo || {};
+  const fora = ds.produtos.filter((p) => !(p.codigo in tab));
+  const ncmsFora = new Map();
+  for (const p of fora) if (p.ncm) ncmsFora.set(p.ncm, (ncmsFora.get(p.ncm) || 0) + 1);
+  const comSt = ds.produtos.filter((p) => tab[p.codigo]).length;
+  const stResumo = {
+    fora,
+    ncmsFora,
+    html: estado.st
+      ? `<p><b>Tabela: ${esc(estado.st.arquivo || 'PR ST')}</b><br>${comSt} produtos com ST · ${ds.produtos.length - comSt - fora.length} sem ST · ${estado.st.origem === 'upload' ? 'importada neste aparelho' : 'versão publicada no app'}</p>
+         ${estado.st.origem === 'upload' ? '<button class="btn btn--contorno btn--mini" data-acao="restaurar-st" style="margin-bottom:12px">Voltar à tabela de ST publicada</button>' : ''}`
+      : '<p>Nenhuma tabela de ST carregada. Envie o PDF “PR ST” em Atualizar tabela.</p>',
+  };
   $('#painel').innerHTML = `
     <div class="cartao">
       <h3>Tabela ativa</h3>
@@ -747,7 +782,7 @@ function renderPainel() {
 
     <div class="cartao">
       <h3>Atualizar tabela</h3>
-      <p>Envie a <b>Lista de Preços de Venda (PDF do Prosyst)</b> e/ou a <b>planilha de descontos (XLS/XLSX)</b>. O PDF substitui a lista de produtos; a planilha atualiza preços, faixas, comissões e preços especiais.</p>
+      <p>Envie a <b>Lista de Preços de Venda (PDF do Prosyst)</b>, a <b>planilha de descontos (XLS/XLSX)</b> ou a <b>tabela de ICMS-ST do PR (PDF)</b> — o app reconhece o tipo. A lista substitui os produtos; a planilha atualiza preços, faixas, comissões e preços especiais; a tabela de ST define MVA e CEST por produto.</p>
       <label class="upload" id="upload">
         <input type="file" id="arquivo" accept=".pdf,.xls,.xlsx,application/pdf,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
         <b class="rotulo" style="color:var(--azul)">Escolher arquivo</b>
@@ -755,35 +790,36 @@ function renderPainel() {
       </label>
       ${pv ? `<div class="previa">
         <b>${esc(pv.arquivo)}</b>
-        <ul>
-          <li>${pv.resumo.total} produtos após a importação</li>
-          <li>${pv.resumo.novos} novos · ${pv.resumo.removidos} removidos</li>
-          <li>${pv.resumo.precoAlterado} com preço alterado</li>
-          ${pv.extra ? `<li>${esc(pv.extra)}</li>` : ''}
-        </ul>
+        <ul>${pv.linhas.map((l) => `<li>${esc(l)}</li>`).join('')}</ul>
         <div class="botoes"><button class="btn" data-acao="confirmar">Aplicar</button><button class="btn btn--contorno" data-acao="descartar">Cancelar</button></div>
       </div>` : ''}
     </div>
 
     <div class="cartao">
       <h3>ICMS-ST (clientes do PR)</h3>
-      <p>Preencha a MVA dos NCMs sujeitos a ST. NCM em branco = sem ST.</p>
-      <div class="grade2" style="margin-bottom:16px">
+      ${stResumo.html}
+      <label class="check"><input type="checkbox" data-st-ipi ${st.ipiNaBase !== false ? 'checked' : ''}> <span><b>Incluir o IPI na base da ST</b><br><small class="mudo">Regra legal: a base da ST é (mercadoria + IPI) × (1 + MVA). Desligado, o cálculo fica igual ao “%ST” da tabela da Mantac (sem IPI).</small></span></label>
+      <div class="grade2" style="margin:16px 0">
         <label class="campo"><span>ICMS interno PR (%)</span><input type="number" step="0.01" data-st="aliqInterna" value="${st.aliqInterna}"></label>
         <label class="campo"><span>ICMS interestadual (%)</span><input type="number" step="0.01" data-st="aliqInter" value="${st.aliqInter}"></label>
       </div>
-      <table class="tabela-ncm">
-        <thead><tr><th>NCM</th><th>Itens</th><th style="text-align:right">MVA %</th></tr></thead>
-        <tbody>${[...ncms.entries()]
-          .sort((a, b) => b[1] - a[1])
-          .map(([n, q]) => `<tr><td>${esc(n)}</td><td>${q}</td><td style="text-align:right"><input type="number" step="0.01" inputmode="decimal" data-mva="${esc(n)}" value="${st.ncms[n]?.mva ?? ''}" placeholder="—" aria-label="MVA do NCM ${esc(n)}"></td></tr>`)
-          .join('')}</tbody>
-      </table>
+      <p class="mudo" style="font-size:13px">ST = (mercadoria${st.ipiNaBase !== false ? ' + IPI' : ''}) × (1 + MVA) × ICMS interno − mercadoria × ICMS interestadual. A MVA e o ICMS interno de cada produto vêm da tabela de ST.</p>
+      ${stResumo.fora.length ? `<details class="detalhes">
+        <summary>${stResumo.fora.length} produtos da Tabela 44 não estão na tabela de ST</summary>
+        <p class="mudo" style="font-size:13px;margin-top:8px">Hoje ficam sem ST. Se algum tiver ST, preencha a MVA pelo NCM (vale só para esses produtos):</p>
+        <table class="tabela-ncm">
+          <thead><tr><th>NCM</th><th>Itens</th><th style="text-align:right">MVA %</th></tr></thead>
+          <tbody>${[...stResumo.ncmsFora.entries()]
+            .sort((a, b) => b[1] - a[1])
+            .map(([n, q]) => `<tr><td>${esc(n)}</td><td>${q}</td><td style="text-align:right"><input type="number" step="0.01" inputmode="decimal" data-mva="${esc(n)}" value="${st.ncms[n]?.mva ?? ''}" placeholder="—" aria-label="MVA do NCM ${esc(n)}"></td></tr>`)
+            .join('')}</tbody>
+        </table>
+        <p class="mudo" style="font-size:13px;margin-top:8px">${stResumo.fora.map((p) => `${esc(p.codigo)}`).join(', ')}</p>
+      </details>` : ''}
       <label class="campo" style="margin-top:16px"><span>Códigos sem ST (exceções)</span>
         <textarea data-semst placeholder="Ex.: 9700, 9701">${esc((st.semSt || []).join(', '))}</textarea>
-        <small>Separados por vírgula ou espaço. Ficam fora da ST mesmo com o NCM configurado.</small>
+        <small>Separados por vírgula ou espaço. Ficam sem ST em qualquer caso.</small>
       </label>
-      <p class="mudo" style="font-size:13px;margin-top:12px">ST = (mercadoria + IPI) × (1 + MVA) × ICMS interno − mercadoria × ICMS interestadual.</p>
     </div>
 
     <div class="cartao">
@@ -811,6 +847,24 @@ async function lerArquivo(file) {
     let novo, extra = '';
     if (ext === 'pdf') {
       const r = await lerPdf(file);
+      if (r.tipo === 'st') {
+        const porCodigo = {};
+        for (const p of r.produtos) porCodigo[p.codigo] = p.st ? { mva: p.mva, aliqInterna: p.aliqInterna, pst: p.pst, cest: p.cest } : null;
+        const novoSt = { arquivo: nome, em: new Date().toISOString(), porCodigo, origem: 'upload' };
+        const cods = new Set(estado.ds.produtos.map((p) => p.codigo));
+        const mudou = estado.ds.produtos.filter((p) => JSON.stringify(estado.st?.porCodigo?.[p.codigo] ?? 'x') !== JSON.stringify(porCodigo[p.codigo] ?? 'x')).length;
+        estado.previa = {
+          arquivo: nome,
+          st: novoSt,
+          linhas: [
+            `Tabela de ICMS-ST: ${r.produtos.length} produtos (${r.produtos.filter((p) => p.st).length} com ST)`,
+            `${estado.ds.produtos.filter((p) => !(p.codigo in porCodigo)).length} produtos da Tabela 44 ficam fora da tabela de ST`,
+            `${r.produtos.filter((p) => !cods.has(p.codigo)).length} códigos da tabela de ST não existem na Tabela 44`,
+            `${mudou} produtos mudam de situação ou MVA`,
+          ],
+        };
+        return renderPainel();
+      }
       novo = aplicarPdf(estado.ds, r, nome);
       extra = r.lista ? `Lista: ${r.lista} · ref. ${dataBR(r.dataRef)}` : '';
       if (r.lista && !/^44\b/.test(r.lista)) extra += ' — atenção: não parece ser a Tabela 44';
@@ -821,7 +875,12 @@ async function lerArquivo(file) {
       extra = `Faixas: ${novo.faixas.map((f) => `${f.nome} ${pct(f.comissao)}`).join(' · ')} · ${exc} preços especiais`;
     } else throw new Error('Formato não suportado (use PDF, XLS ou XLSX).');
     novo.origem = 'upload';
-    estado.previa = { arquivo: nome, ds: novo, resumo: comparar(estado.ds, novo), extra };
+    const resumo = comparar(estado.ds, novo);
+    estado.previa = {
+      arquivo: nome,
+      ds: novo,
+      linhas: [`${resumo.total} produtos após a importação`, `${resumo.novos} novos · ${resumo.removidos} removidos`, `${resumo.precoAlterado} com preço alterado`, extra].filter(Boolean),
+    };
   } catch (e) {
     console.error(e);
     aviso('Erro: ' + e.message);
@@ -996,6 +1055,13 @@ function ligarEventos() {
       case 'novo-orc':
         return novoOrcamento();
       case 'confirmar':
+        if (estado.previa.st) {
+          estado.st = estado.previa.st;
+          estado.previa = null;
+          db.gravar('st', estado.st);
+          renderPainel();
+          return aviso('Tabela de ST atualizada');
+        }
         estado.ds = estado.previa.ds;
         estado.previa = null;
         db.gravar('ds', estado.ds);
@@ -1014,6 +1080,12 @@ function ligarEventos() {
         renderTopo();
         renderPainel();
         return aviso('Tabela publicada restaurada');
+      case 'restaurar-st':
+        if (!(await confirmar('Descartar a tabela de ST importada neste aparelho e voltar à publicada?', 'Restaurar', true))) return;
+        estado.st = await carregarStEmbutido();
+        await db.apagar('st');
+        renderPainel();
+        return aviso('Tabela de ST publicada restaurada');
       case 'exportar-backup':
         return exportarBackup();
     }
@@ -1042,6 +1114,12 @@ function ligarEventos() {
     if (el.id === 'arquivo-backup' && el.files[0]) return importarBackup(el.files[0]);
     const st = estado.cfg.st;
     if (el.dataset.st) st[el.dataset.st] = Number(el.value) || 0;
+    else if (el.dataset.stIpi !== undefined) {
+      st.ipiNaBase = el.checked;
+      salvarCfg();
+      renderPainel();
+      return aviso(el.checked ? 'IPI incluído na base da ST' : 'ST sem IPI na base (igual ao %ST da tabela)');
+    }
     else if (el.dataset.mva !== undefined) {
       if (el.value === '') delete st.ncms[el.dataset.mva];
       else st.ncms[el.dataset.mva] = { mva: Number(el.value) };

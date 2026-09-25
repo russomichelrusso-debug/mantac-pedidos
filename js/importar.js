@@ -1,5 +1,5 @@
 // Leitura de arquivos enviados no painel (PDF da lista e planilha XLS/XLSX).
-import { parseTabelaPdf, parseTabelaXls } from './parsers.js';
+import { parseTabelaPdf, parseTabelaXls, parseStPdf, pareceTabelaSt } from './parsers.js';
 
 let pdfjs;
 async function carregarPdfJs() {
@@ -20,7 +20,7 @@ function carregarScript(src) {
   });
 }
 
-export async function lerPdf(arquivo) {
+async function paginasPdf(arquivo) {
   const lib = await carregarPdfJs();
   const doc = await lib.getDocument({ data: new Uint8Array(await arquivo.arrayBuffer()) }).promise;
   const paginas = [];
@@ -28,9 +28,20 @@ export async function lerPdf(arquivo) {
     const tc = await (await doc.getPage(n)).getTextContent();
     paginas.push(tc.items.map((i) => ({ x: i.transform[4], y: i.transform[5], str: i.str })));
   }
+  return paginas;
+}
+
+/** Lê um PDF e identifica se é a lista de preços ou a tabela de ICMS-ST. */
+export async function lerPdf(arquivo) {
+  const paginas = await paginasPdf(arquivo);
+  if (pareceTabelaSt(paginas)) {
+    const st = parseStPdf(paginas);
+    if (!st.produtos.length) throw new Error('Nenhum produto reconhecido na tabela de ST.');
+    return { tipo: 'st', ...st };
+  }
   const r = parseTabelaPdf(paginas);
-  if (!r.produtos.length) throw new Error('Nenhum produto reconhecido. O arquivo é a "Lista de Preços de Venda" do Prosyst?');
-  return r;
+  if (!r.produtos.length) throw new Error('Nenhum produto reconhecido. O arquivo é a "Lista de Preços de Venda" do Prosyst ou a tabela de ST?');
+  return { tipo: 'precos', ...r };
 }
 
 export async function lerXls(arquivo) {
