@@ -183,6 +183,17 @@ main { max-width: 820px; margin: 0 auto; padding: var(--e-md) var(--e-md) var(--
 }
 .selo--st { background: var(--alerta-bg); color: var(--alerta); }
 .selo--ok { background: var(--sucesso-bg); color: var(--sucesso); }
+.selo--oferta { background: #ffe14d; color: #3d3000; }
+.item__meta .of { color: #7a5c00; }
+.chip-oferta {
+  display: block; width: 100%; margin-top: var(--e-sm); min-height: 44px; padding: 8px 14px; cursor: pointer; text-align: left;
+  border: 1px solid #e6c200; background: #fff8cc; color: #3d3000; font-size: 14px; font-weight: 400;
+}
+.chip-oferta b { font-weight: 700; }
+.chip-oferta::before { content: '☆ '; font-weight: 700; }
+.chip-oferta[aria-pressed='true'] { background: #ffe14d; border-color: #c9a800; }
+.chip-oferta[aria-pressed='true']::before { content: '★ '; }
+.aviso-oferta { margin: var(--e-sm) 0 0; padding: 10px 12px; background: #fff8cc; border-left: 4px solid #e6c200; font-size: 14px; color: #3d3000; }
 .card__nome {
   all: unset; cursor: pointer; display: block; font-weight: 600; font-size: 16px; line-height: 1.35;
 }
@@ -340,6 +351,7 @@ main { max-width: 820px; margin: 0 auto; padding: var(--e-md) var(--e-md) var(--
 .check { display: flex; gap: var(--e-sm); align-items: flex-start; cursor: pointer; margin: var(--e-md) 0 0; }
 .check input { width: 22px; height: 22px; margin: 2px 0 0; accent-color: var(--azul); flex: none; }
 .check small { font-size: 13px; font-weight: 400; }
+.check--caixa { margin: var(--e-lg) 0 0; padding: var(--e-sm) var(--e-md); border: 1px solid var(--linha); background: var(--canvas); }
 .detalhes { margin-top: var(--e-md); border-top: 1px solid var(--linha); padding-top: var(--e-sm); }
 .detalhes summary { cursor: pointer; font-weight: 600; color: var(--alerta); }
 
@@ -364,3 +376,4 @@ main { max-width: 820px; margin: 0 auto; padding: var(--e-md) var(--e-md) var(--
   .segmentos--faixa button { font-size: 12px; }
 }
 @media (prefers-reduced-motion: reduce) { .aviso { transition: none; } }
+.detalhes--neutro summary { color: var(--azul); }

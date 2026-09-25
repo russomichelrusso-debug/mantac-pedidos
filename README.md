@@ -39,6 +39,15 @@ ICMS-ST    = (mercadoria + IPI*) × (1 + MVA do item) × ICMS interno PR − mer
 comissão   = mercadoria × % da faixa (8% · 8% · 8% · 5%)
 ```
 
+**Ofertas** (`data/ofertas.json`, editável no Painel):
+- Enquanto a campanha estiver valendo, o preço da oferta substitui o de tabela. O "Setembro de Ofertas" vai até 30/09/26 e tem 179 produtos.
+- As faixas −10%, 2×10 e 3×10 incidem sobre o preço da oferta, e a comissão é a da oferta (8%).
+- A oferta só vale quando for menor que o preço de tabela.
+- Terminada a validade, os preços de tabela voltam sozinhos.
+- No Pedido, o botão amarelo lista só os produtos em oferta.
+
+**À vista:** a opção no orçamento aplica −2% em todos os itens e muda a condição para "à vista" no texto, na imagem e no PDF.
+
 **ICMS-ST por produto.** A regra vem da tabela "PR ST 2025 — Mantac Industrialização" (`data/st-pr.json`): cada código tem ST ou não, com MVA (39%, 50%, 58% ou 71,78%), ICMS interno (19,5%) e CEST. O NCM sozinho não decide. Dentro do 39.17.3229, por exemplo, há itens com MVA 39%, com MVA 71,78% e sem ST.
 
 - \* **IPI na base**: ligado por padrão, que é a regra legal. Desligado, o cálculo fica igual à coluna "%ST" da tabela da Mantac, que não considera IPI. A opção fica no Painel.
