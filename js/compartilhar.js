@@ -10,9 +10,16 @@ const LINHA = '#DCE0E8';
 const hoje = (d = new Date()) => d.toLocaleDateString('pt-BR');
 const nomeArquivo = (orc, ext) => {
   const cli = (orc.cliente || 'cliente').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^\w]+/g, '-').replace(/^-|-$/g, '');
-  return `Orcamento-Mantac-${cli}-${new Date().toISOString().slice(0, 10)}.${ext}`;
+  return `Orcamento-Mantac-${orc.numero ? orc.numero + '-' : ''}${cli}-${new Date().toISOString().slice(0, 10)}.${ext}`;
 };
 const unidade = (p) => p.um || 'un';
+const titulo = (orc) => (orc.numero ? `ORÇAMENTO Nº ${orc.numero}` : 'ORÇAMENTO');
+function docFmt(v) {
+  const d = String(v ?? '').replace(/\D/g, '');
+  if (d.length === 14) return d.replace(/(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})/, '$1.$2.$3/$4-$5');
+  if (d.length === 11) return d.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3-$4');
+  return '';
+}
 
 function rodape(ds, temSt) {
   const lista = ds?.fontes?.pdf?.lista ? `Tabela ${ds.fontes.pdf.lista.split(' - ')[0]}` : 'Tabela 44';
@@ -23,8 +30,8 @@ function rodape(ds, temSt) {
 // ---------- Texto ----------
 export function gerarTexto(orc, linhas, tot, ds) {
   const l = [];
-  l.push('*MANTAC* — Orçamento');
-  if (orc.cliente) l.push(`Cliente: ${orc.cliente}`);
+  l.push(`*MANTAC* — Orçamento${orc.numero ? ' nº ' + orc.numero : ''}`);
+  if (orc.cliente) l.push(`Cliente: ${orc.cliente}${docFmt(orc.clienteDoc) ? ' · ' + docFmt(orc.clienteDoc) : ''}`);
   l.push(`Vendedor: ${orc.vendedor}`);
   l.push(`Data: ${hoje()}`);
   l.push('');
@@ -81,7 +88,7 @@ export async function gerarImagem(orc, linhas, tot, ds) {
   medir.font = `600 28px ${F}`;
   const blocos = linhas.map((x) => quebrar(medir, `${x.prod.codigo} · ${x.prod.descricao}`, W - 2 * M));
   const altItens = blocos.reduce((s, b) => s + b.length * 36 + 88, 0);
-  const H = 300 + altItens + 260 + (tot.st ? 44 : 0);
+  const H = 300 + altItens + 260 + (tot.st ? 44 : 0) + (docFmt(orc.clienteDoc) ? 30 : 0);
 
   const cv = document.createElement('canvas');
   cv.width = W;
@@ -97,7 +104,7 @@ export async function gerarImagem(orc, linhas, tot, ds) {
   ctx.textAlign = 'right';
   ctx.fillStyle = TINTA;
   ctx.font = `700 34px ${F}`;
-  ctx.fillText('ORÇAMENTO', W - M, 78);
+  ctx.fillText(titulo(orc), W - M, 78);
   ctx.fillStyle = CORPO;
   ctx.font = `400 24px ${F}`;
   ctx.fillText(hoje(), W - M, 114);
@@ -116,7 +123,12 @@ export async function gerarImagem(orc, linhas, tot, ds) {
   ctx.font = `700 28px ${F}`;
   ctx.fillText(orc.cliente || '—', M, y, W / 2 - M);
   ctx.fillText(orc.vendedor, W / 2 + 20, y);
-  y += 30;
+  if (docFmt(orc.clienteDoc)) {
+    ctx.fillStyle = CORPO;
+    ctx.font = `400 22px ${F}`;
+    ctx.fillText(docFmt(orc.clienteDoc), M, y + 32);
+  }
+  y += 30 + (docFmt(orc.clienteDoc) ? 30 : 0);
 
   linhas.forEach((x, i) => {
     y += 22;
@@ -207,7 +219,7 @@ export async function gerarPdf(orc, linhas, tot, ds) {
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(16);
   doc.setTextColor(TINTA);
-  doc.text('ORÇAMENTO', W - M, 17, { align: 'right' });
+  doc.text(titulo(orc), W - M, 17, { align: 'right' });
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(10);
   doc.setTextColor(CORPO);
@@ -222,6 +234,12 @@ export async function gerarPdf(orc, linhas, tot, ds) {
   doc.setTextColor(TINTA);
   doc.text(ansi(orc.cliente || '—'), M, 43, { maxWidth: W / 2 - M - 4 });
   doc.text(ansi(orc.vendedor), W / 2, 43);
+  if (docFmt(orc.clienteDoc)) {
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.setTextColor(CORPO);
+    doc.text(docFmt(orc.clienteDoc), M, 48);
+  }
 
   const temSt = tot.st > 0;
   const head = ['Código', 'Descrição', 'Qtd', 'Un', 'Unit.', 'IPI', ...(temSt ? ['ST'] : []), 'Total'];
@@ -237,7 +255,7 @@ export async function gerarPdf(orc, linhas, tot, ds) {
   ]);
   const direita = { halign: 'right' };
   doc.autoTable({
-    startY: 50,
+    startY: docFmt(orc.clienteDoc) ? 54 : 50,
     head: [head],
     body,
     margin: { left: M, right: M },
