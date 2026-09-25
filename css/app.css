@@ -382,3 +382,11 @@ main { max-width: 820px; margin: 0 auto; padding: var(--e-md) var(--e-md) var(--
 .segmentos--2 { grid-template-columns: repeat(2, 1fr); }
 .segmentos--5 { grid-template-columns: repeat(5, 1fr); }
 .totais .interno--sub { margin-top: 4px; padding-top: 0; border-top: 0; color: var(--corpo); }
+
+.botoes-barra { display: flex; align-items: center; gap: var(--e-xs); }
+.botoes-barra .btn--mini { min-height: 40px; padding: 0 12px; }
+.hist-item--pedido { border-left: 4px solid var(--tinta); }
+.tabela-hist tfoot .sub { font-size: 14px; font-weight: 400; color: var(--corpo); }
+/* Grade de dados sem "buraco" cinza quando sobra célula na última linha. */
+.dados { gap: 0; background: none; border: 0; border-top: 1px solid var(--linha); border-left: 1px solid var(--linha); }
+.dados div { border-right: 1px solid var(--linha); border-bottom: 1px solid var(--linha); }

@@ -19,6 +19,11 @@ O uso segue o modelo do app de vendas da Cortag (appdb), sem levantamento de est
   - Cadastro com nome, CNPJ/CPF, fantasia, cidade, telefone, e-mail e observações.
   - O botão "Buscar" preenche os dados pelo CNPJ (BrasilAPI, precisa de internet).
   - "Orçar" já seleciona o cliente no pedido.
+- **Pedidos oficiais no histórico**: no Painel, a caixa "Importar pedidos para o histórico" recebe uma ou várias cópias de pedido Mantac (PDF do Prosyst, "Pedido N°").
+  - Cada pedido entra no Histórico com itens, preços, condição, observação e totais.
+  - Um cliente novo é cadastrado pelo CNPJ, com código Mantac, IE, contato e cidade. A marcação "recolhe a ST" vem da observação do pedido.
+  - O pedido pode ser duplicado como orçamento novo, com os preços atuais.
+  - `node tools/analisar-pedido.mjs pedido.pdf` confere cada item do pedido contra o cálculo do app (tabela, oferta, faixa, desconto de pagamento).
 - **Histórico**: orçamentos salvos com nº, data, cliente e total. Cada um pode ser reaberto e editado, duplicado como novo ou excluído.
 - **Painel** (engrenagem, sem senha):
   - importa o PDF do Prosyst ou o XLS/XLSX de descontos, com prévia antes de aplicar;
