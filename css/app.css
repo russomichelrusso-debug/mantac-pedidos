@@ -377,3 +377,8 @@ main { max-width: 820px; margin: 0 auto; padding: var(--e-md) var(--e-md) var(--
 }
 @media (prefers-reduced-motion: reduce) { .aviso { transition: none; } }
 .detalhes--neutro summary { color: var(--azul); }
+
+.segmentos--3 { grid-template-columns: repeat(3, 1fr); }
+.segmentos--2 { grid-template-columns: repeat(2, 1fr); }
+.segmentos--5 { grid-template-columns: repeat(5, 1fr); }
+.totais .interno--sub { margin-top: 4px; padding-top: 0; border-top: 0; color: var(--corpo); }

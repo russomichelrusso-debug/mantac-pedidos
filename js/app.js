@@ -1,5 +1,5 @@
 import * as db from './db.js';
-import { CONFIG_PADRAO, calcularItem, totalizar, multiploEmb, situacaoSt, regraSt, ofertaVigente, precoOferta, brl, numero, pct } from './precos.js';
+import { CONFIG_PADRAO, CONDICOES_PADRAO, calcularItem, totalizar, multiploEmb, situacaoSt, regraSt, ofertaVigente, precoOferta, brl, numero, pct } from './precos.js';
 import { aplicarPdf, aplicarXls, comparar } from './dados.js';
 import { gerarTexto, gerarImagem, gerarPdf, compartilharArquivo, compartilharTexto } from './compartilhar.js';
 
@@ -29,7 +29,7 @@ const ICONES = {
   editar: '<svg viewBox="0 0 24 24"><path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5z"/></svg>',
 };
 
-const orcVazio = (cfg) => ({ id: null, numero: null, clienteId: null, cliente: '', clienteDoc: '', vendedor: cfg.vendedor, faixaPadrao: 0, aVista: false, itens: [] });
+const orcVazio = (cfg) => ({ id: null, numero: null, clienteId: null, cliente: '', clienteDoc: '', clienteCodigo: '', vendedor: cfg.vendedor, faixaPadrao: 0, condicao: '28dd', recolheSt: false, itens: [] });
 
 const estado = {
   ds: null,
@@ -51,7 +51,16 @@ const estado = {
 let indice = [];
 // Configuração de cálculo: preferências salvas + tabela de ST por código.
 const ofertasAtivas = () => (ofertaVigente(estado.ofertas) ? estado.ofertas : null);
-const ctx = () => ({ ...estado.cfg, tabelaSt: estado.st, ofertas: ofertasAtivas(), aVista: !!estado.orc?.aVista });
+const condicoes = () => (estado.cfg.condicoes?.length ? estado.cfg.condicoes : CONDICOES_PADRAO);
+const condicaoAtual = (orc = estado.orc) => condicoes().find((c) => c.id === orc?.condicao) || condicoes()[0];
+const nomeCondicao = (c) => (c.desconto ? `${c.nome} (−${String(c.desconto).replace('.', ',')}%)` : c.nome);
+const ctx = () => ({
+  ...estado.cfg,
+  tabelaSt: estado.st,
+  ofertas: ofertasAtivas(),
+  descPagamento: condicaoAtual().desconto || 0,
+  clienteRecolheSt: !!estado.orc?.recolheSt,
+});
 const dataCurta = (iso) => (iso ? iso.slice(8, 10) + '/' + iso.slice(5, 7) : '');
 let porCodigo = new Map();
 
@@ -78,6 +87,8 @@ async function iniciar() {
   const [cfg, orc, ds, clientes, historico, seq, st, ofertas] = await Promise.all(['cfg', 'orc', 'ds', 'clientes', 'historico', 'seq', 'st', 'ofertas'].map((k) => db.ler(k).catch(() => undefined)));
   if (cfg) estado.cfg = { ...structuredClone(CONFIG_PADRAO), ...cfg, st: { ...CONFIG_PADRAO.st, ...cfg.st } };
   estado.orc = { ...orcVazio(estado.cfg), ...(orc || {}) };
+  if (estado.orc.aVista) estado.orc.condicao = 'avista';
+  delete estado.orc.aVista;
   estado.clientes = clientes || [];
   estado.historico = historico || [];
   estado.seq = seq || 0;
@@ -225,7 +236,7 @@ function renderClienteCard() {
       <div class="cliente-card__info">
         <span class="rotulo">Cliente</span>
         <b class="cliente-card__nome">${esc(nome)}</b>
-        <span class="mudo">${esc(formatarDoc(c?.doc || estado.orc.clienteDoc) || 'Sem CNPJ')}${c?.cidade ? ' · ' + esc(c.cidade) : ''}</span>
+        <span class="mudo">${c?.codigoErp ? `Cód. ${esc(c.codigoErp)} · ` : ''}${esc(formatarDoc(c?.doc || estado.orc.clienteDoc) || 'Sem CNPJ')}${c?.cidade ? ' · ' + esc(c.cidade) : ''}${c?.recolheSt ? ' · recolhe ST' : ''}</span>
         ${qtdOrc ? `<button class="link" data-historico-cliente="${esc(c.id)}">${qtdOrc} orçamento${qtdOrc > 1 ? 's' : ''} anterior${qtdOrc > 1 ? 'es' : ''}</button>` : ''}
       </div>
       <button class="btn-icone" data-acao="escolher-cliente" aria-label="Trocar cliente">${ICONES.trocar}</button>
@@ -387,7 +398,7 @@ function renderOrcamento() {
         <span class="num">${i + 1}</span>
         <button class="item__abrir" data-abrir="${esc(x.prod.codigo)}">
           <span class="item__desc">${esc(x.prod.descricao)}</span>
-          <span class="item__meta">Cód. ${esc(x.prod.codigo)} · múltiplos de ${numero(x.prod.emb)} ${esc(x.prod.um)}${x.calc.emOferta ? ' · <b class="of">OFERTA</b>' : ''}${x.calc.temSt ? ' · <b class="st">ST</b>' : ''}</span>
+          <span class="item__meta">Cód. ${esc(x.prod.codigo)} · múltiplos de ${numero(x.prod.emb)} ${esc(x.prod.um)}${x.calc.emOferta ? ' · <b class="of">OFERTA</b>' : ''}${x.calc.temSt ? ' · <b class="st">ST</b>' : ''}${x.calc.stDoCliente ? ' · ST pelo cliente' : ''}</span>
         </button>
         <button class="btn-icone btn-icone--sem-borda" data-remover="${esc(x.prod.codigo)}" aria-label="Remover ${esc(x.prod.codigo)}">${ICONES.x}</button>
       </div>
@@ -404,13 +415,17 @@ function renderOrcamento() {
         <div class="linha-orc__total">
           <b>${brl(x.calc.total)}</b>
           <span>${brl(x.calc.unit)}/${esc(x.prod.um)} + IPI${x.calc.st ? ' + ST' : ''}</span>
-          <span class="comissao">com. ${pct(x.calc.comissaoPct)} · ${brl(x.calc.comissao)}</span>
+          <span class="comissao">com. ${pct(x.calc.comissaoPct)} · ${brl(x.calc.comissao)}${x.prod.peso ? ` · P.M. ${brl(x.calc.unit / x.prod.peso)}` : ''}</span>
         </div>
       </div>
     </div>`
       )
       .join('')}
-    ${linhas.length ? `<label class="check check--caixa"><input type="checkbox" data-a-vista ${o.aVista ? 'checked' : ''}> <span><b>Pagamento à vista (−2%)</b><br><small class="mudo">Desconto de 2% em todos os itens; condição “à vista” no orçamento. Sem marcar: 28 DD.</small></span></label>` : ''}
+    ${linhas.length ? `<div class="campo" style="margin-top:24px"><span>Condição de pagamento</span>
+      <div class="segmentos segmentos--${condicoes().length}" role="group" aria-label="Condição de pagamento">${condicoes()
+        .map((c) => `<button data-condicao="${esc(c.id)}" aria-pressed="${c.id === condicaoAtual().id}">${esc(c.nome)}${c.desconto ? `<small>−${String(c.desconto).replace('.', ',')}%</small>` : '<small>sem desc.</small>'}</button>`)
+        .join('')}</div></div>
+      <label class="check check--caixa"><input type="checkbox" data-recolhe-st ${o.recolheSt ? 'checked' : ''}> <span><b>Cliente recolhe a ST</b><br><small class="mudo">Não cobra ICMS-ST no orçamento (como no pedido oficial “cliente recolhe a ST”).</small></span></label>` : ''}
     ${linhas.length ? `<div class="totais">
       <dl>
         <dt>Total s/ impostos</dt><dd>${brl(t.mercadoria)}</dd>
@@ -419,6 +434,7 @@ function renderOrcamento() {
         <div class="total" style="display:contents"><dt>Total</dt><dd>${brl(t.total)}</dd></div>
       </dl>
       <div class="interno"><span class="rotulo">Comissão (não sai no orçamento)</span> <b>${brl(t.comissao)}</b></div>
+      <div class="interno interno--sub"><span class="rotulo">Peso total · P.M.</span> <span>${numero(Math.round(t.peso * 100) / 100)} kg · ${brl(t.pm)}/kg</span></div>
       <p class="rotulo" style="margin:20px 0 8px">Compartilhar</p>
       <div class="acoes">
         <button class="btn" data-exportar="texto">Texto</button>
@@ -452,7 +468,9 @@ function salvarNoHistorico() {
     clienteDoc: o.clienteDoc,
     vendedor: o.vendedor,
     faixaPadrao: o.faixaPadrao,
-    aVista: !!o.aVista,
+    condicao: o.condicao,
+    recolheSt: !!o.recolheSt,
+    clienteCodigo: o.clienteCodigo || '',
     itens: o.itens.map((i) => ({ ...i })),
     // Retrato dos valores no momento em que foi salvo (a tabela pode mudar depois).
     retrato: linhas.map((x) => ({ codigo: x.prod.codigo, descricao: x.prod.descricao, um: x.prod.um, qtd: x.qtd, faixa: (x.calc.emOferta ? 'Oferta · ' : '') + (estado.ds.faixas[x.k]?.nome || ''), unit: x.calc.unit, total: x.calc.total })),
@@ -474,7 +492,12 @@ async function exportar(tipo) {
   salvarNoHistorico();
   renderOrcamento();
   const tot = totalizar(linhas);
-  const orc = { ...estado.orc, vendedor: estado.orc.vendedor || estado.cfg.vendedor, ofertaValidade: ofertasAtivas()?.validade };
+  const orc = {
+    ...estado.orc,
+    vendedor: estado.orc.vendedor || estado.cfg.vendedor,
+    ofertaValidade: ofertasAtivas()?.validade,
+    condicaoTexto: nomeCondicao(condicaoAtual()),
+  };
   try {
     if (tipo === 'texto') {
       const r = await compartilharTexto(gerarTexto(orc, linhas, tot, estado.ds));
@@ -502,7 +525,7 @@ async function novoOrcamento() {
 }
 
 function selecionarCliente(c) {
-  Object.assign(estado.orc, { clienteId: c?.id || null, cliente: c?.nome || '', clienteDoc: c?.doc || '' });
+  Object.assign(estado.orc, { clienteId: c?.id || null, cliente: c?.nome || '', clienteDoc: c?.doc || '', clienteCodigo: c?.codigoErp || '', recolheSt: !!c?.recolheSt });
   salvarOrc();
   renderClienteCard();
 }
@@ -562,7 +585,7 @@ function abrirDetalhe(codigo) {
       <tbody>${linhasFaixa}</tbody>
     </table>
     ${c0.emOferta ? `<p class="aviso-oferta"><b>${esc(ofertasAtivas().nome)}:</b> ${brl(precoOferta(p, ctx()))}/${esc(p.um)} até ${dataBR(ofertasAtivas().validade)} (tabela ${brl(p.preco)}). As faixas incidem sobre o preço da oferta; comissão ${pct(c0.comissaoPct)}.</p>` : ''}
-    <p class="mudo" style="font-size:13px;margin:8px 0 0">C/ impostos = unitário + IPI ${pct(p.ipi / 100)}${c0.temSt ? ' + ICMS-ST' : ''}${estado.orc.aVista ? ' · já com −2% à vista' : ''}. Preço de tabela já inclui ICMS.</p>
+    <p class="mudo" style="font-size:13px;margin:8px 0 0">C/ impostos = unitário + IPI ${pct(p.ipi / 100)}${c0.temSt ? ' + ICMS-ST' : ''}${condicaoAtual().desconto ? ` · já com −${String(condicaoAtual().desconto).replace('.', ',')}% (${esc(condicaoAtual().nome)})` : ''}. Preço de tabela já inclui ICMS.</p>
     <h3 class="subtitulo">Dados comerciais</h3>
     <dl class="dados">
       <div><dt>Unidade</dt><dd>${esc(p.um)}</dd></div>
@@ -573,7 +596,7 @@ function abrirDetalhe(codigo) {
       <div><dt>ICMS-ST</dt><dd>${textoSt(p)}</dd></div>
       ${regraSt(p, ctx())?.cest ? `<div><dt>CEST</dt><dd>${esc(regraSt(p, ctx()).cest)}</dd></div>` : ''}
       <div><dt>Vigência</dt><dd>${dataBR(p.vigencia)}</dd></div>
-      <div><dt>Pagamento</dt><dd>${estado.orc.aVista ? 'À vista (−2%)' : '28 DD'}</dd></div>
+      <div><dt>Pagamento</dt><dd>${esc(nomeCondicao(condicaoAtual()))}</dd></div>
     </dl>
     ${tecnico}`);
 }
@@ -645,11 +668,17 @@ function abrirFormCliente(id, depois) {
       </label>
       <label class="campo"><span>Razão social / nome *</span><input name="nome" required autocomplete="off" value="${esc(c.nome)}"></label>
       <label class="campo"><span>Nome fantasia</span><input name="fantasia" autocomplete="off" value="${esc(c.fantasia || '')}"></label>
+      <div class="grade2">
+        <label class="campo"><span>Cód. cliente Mantac</span><input name="codigoErp" inputmode="numeric" autocomplete="off" value="${esc(c.codigoErp || '')}" placeholder="Ex.: 2244"></label>
+        <label class="campo"><span>Inscrição estadual</span><input name="ie" autocomplete="off" value="${esc(c.ie || '')}"></label>
+      </div>
       <label class="campo"><span>Cidade / UF</span><input name="cidade" autocomplete="off" value="${esc(c.cidade || '')}" placeholder="Curitiba/PR"></label>
       <div class="grade2">
         <label class="campo"><span>Telefone</span><input name="telefone" inputmode="tel" autocomplete="off" value="${esc(c.telefone || '')}"></label>
         <label class="campo"><span>E-mail</span><input name="email" type="email" autocomplete="off" value="${esc(c.email || '')}"></label>
       </div>
+      <label class="campo"><span>Contato</span><input name="contato" autocomplete="off" value="${esc(c.contato || '')}"></label>
+      <label class="check"><input type="checkbox" name="recolheSt" ${c.recolheSt ? 'checked' : ''}> <span><b>Cliente recolhe a ST</b><br><small class="mudo">Os orçamentos deste cliente saem sem ICMS-ST.</small></span></label>
       <label class="campo"><span>Observações</span><textarea name="obs">${esc(c.obs || '')}</textarea></label>
       <div class="botoes botoes--fim">
         ${id ? `<button type="button" class="btn btn--perigo" data-excluir-cliente="${esc(id)}">${ICONES.lixo} Excluir</button>` : ''}
@@ -685,6 +714,7 @@ async function buscarCnpj() {
 
 function salvarCliente(form) {
   const dados = Object.fromEntries(new FormData(form));
+  dados.recolheSt = form.recolheSt.checked;
   dados.nome = dados.nome.trim();
   if (!dados.nome) return aviso('Informe o nome do cliente.');
   dados.doc = soDigitos(dados.doc);
@@ -770,7 +800,9 @@ async function carregarDoHistorico(id, duplicar) {
     clienteDoc: h.clienteDoc,
     vendedor: duplicar ? estado.cfg.vendedor : h.vendedor,
     faixaPadrao: h.faixaPadrao ?? 0,
-    aVista: duplicar ? false : !!h.aVista,
+    condicao: h.condicao || (h.aVista ? 'avista' : '28dd'),
+    recolheSt: !!h.recolheSt,
+    clienteCodigo: h.clienteCodigo || '',
     itens,
   };
   salvarOrc();
@@ -878,6 +910,17 @@ function renderPainel() {
           </div>
         </form>
       </details>
+    </div>
+
+    <div class="cartao">
+      <h3>Condições de pagamento</h3>
+      <p>Desconto aplicado em todos os itens do orçamento conforme a condição escolhida.</p>
+      <table class="tabela-ncm">
+        <thead><tr><th>Condição</th><th style="text-align:right">Desconto %</th></tr></thead>
+        <tbody>${condicoes()
+          .map((c, i) => `<tr><td><input type="text" data-cond-nome="${i}" value="${esc(c.nome)}" style="width:100%;text-align:left" aria-label="Nome da condição"></td><td style="text-align:right"><input type="number" step="0.5" data-cond-desc="${i}" value="${c.desconto}" aria-label="Desconto da condição ${esc(c.nome)}"></td></tr>`)
+          .join('')}</tbody>
+      </table>
     </div>
 
     <div class="cartao">
@@ -1038,7 +1081,7 @@ function ligarEventos() {
 
   document.addEventListener('click', async (e) => {
     const el = e.target.closest(
-      '#ofertas-chip,[data-ir],[data-acao],[data-abrir],[data-add],[data-pend],[data-faixa-padrao],[data-faixa-item],[data-passo],[data-remover],[data-exportar],[data-escolher],[data-editar-cliente],[data-orcar],[data-excluir-cliente],[data-ver-orc],[data-reabrir],[data-duplicar],[data-excluir-orc],[data-historico-cliente]'
+      '#ofertas-chip,[data-condicao],[data-ir],[data-acao],[data-abrir],[data-add],[data-pend],[data-faixa-padrao],[data-faixa-item],[data-passo],[data-remover],[data-exportar],[data-escolher],[data-editar-cliente],[data-orcar],[data-excluir-cliente],[data-ver-orc],[data-reabrir],[data-duplicar],[data-excluir-orc],[data-historico-cliente]'
     );
     if (!el) return;
     const d = el.dataset;
@@ -1065,6 +1108,13 @@ function ligarEventos() {
       estado.limite = 30;
       renderOfertasChip();
       return renderResultados();
+    }
+    if (d.condicao) {
+      estado.orc.condicao = d.condicao;
+      salvarOrc();
+      renderBarra();
+      renderOrcamento();
+      return aviso(`Pagamento: ${nomeCondicao(condicaoAtual())}`);
     }
     if (d.faixaPadrao !== undefined) {
       estado.orc.faixaPadrao = Number(d.faixaPadrao);
@@ -1214,12 +1264,12 @@ function ligarEventos() {
       renderBarra();
       return renderOrcamento();
     }
-    if (el.dataset.aVista !== undefined) {
-      estado.orc.aVista = el.checked;
+    if (el.dataset.recolheSt !== undefined) {
+      estado.orc.recolheSt = el.checked;
       salvarOrc();
       renderBarra();
       renderOrcamento();
-      return aviso(el.checked ? 'À vista: −2% aplicado' : 'Condição 28 DD');
+      return aviso(el.checked ? 'ST recolhida pelo cliente: não cobrada' : 'ST cobrada no orçamento');
     }
     if (el.id === 'arquivo' && el.files[0]) return lerArquivo(el.files[0]);
     if (el.id === 'arquivo-backup' && el.files[0]) return importarBackup(el.files[0]);
@@ -1235,7 +1285,13 @@ function ligarEventos() {
       if (el.value === '') delete st.ncms[el.dataset.mva];
       else st.ncms[el.dataset.mva] = { mva: Number(el.value) };
     } else if (el.dataset.semst !== undefined) st.semSt = el.value.split(/[\s,;]+/).filter(Boolean);
-    else if (el.dataset.cfg === 'vendedor') {
+    else if (el.dataset.condNome !== undefined || el.dataset.condDesc !== undefined) {
+      const lista = condicoes().map((c) => ({ ...c }));
+      const i = Number(el.dataset.condNome ?? el.dataset.condDesc);
+      if (el.dataset.condNome !== undefined) lista[i].nome = el.value.trim() || lista[i].nome;
+      else lista[i].desconto = Math.max(0, Number(el.value) || 0);
+      estado.cfg.condicoes = lista;
+    } else if (el.dataset.cfg === 'vendedor') {
       estado.cfg.vendedor = el.value.trim();
       if (!estado.orc.itens.length) estado.orc.vendedor = estado.cfg.vendedor;
     } else return;

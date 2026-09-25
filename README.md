@@ -46,7 +46,22 @@ comissão   = mercadoria × % da faixa (8% · 8% · 8% · 5%)
 - Terminada a validade, os preços de tabela voltam sozinhos.
 - No Pedido, o botão amarelo lista só os produtos em oferta.
 
-**À vista:** a opção no orçamento aplica −2% em todos os itens e muda a condição para "à vista" no texto, na imagem e no PDF.
+**Condição de pagamento:**
+- O orçamento tem as condições 28 DD (sem desconto), 14 DD (−2%) e À vista (−2%).
+- O desconto da condição vale para todos os itens.
+- Os percentuais podem ser editados no Painel.
+
+**Cliente recolhe a ST:**
+- É uma marcação no cadastro do cliente, que pode ser trocada no orçamento.
+- Com ela marcada, o orçamento sai sem ICMS-ST, como nos pedidos em que a Mantac anota "cliente recolhe a ST".
+
+**Peso total e P.M. (R$/kg):**
+- Aparecem no orçamento, apenas para uso interno, como no pedido oficial.
+
+**Conferência:**
+- O pedido oficial nº 096335 (02/09/26: oferta de setembro, 14 DD com −2%, cliente recolhe a ST) foi refeito no app.
+- 8 dos 9 preços unitários e o peso total (112,46 kg) bateram.
+- Só o 6290 teve 1 centavo de diferença de arredondamento (3,675 vira 3,67 no sistema da Mantac e 3,68 no app).
 
 **ICMS-ST por produto.** A regra vem da tabela "PR ST 2025 — Mantac Industrialização" (`data/st-pr.json`): cada código tem ST ou não, com MVA (39%, 50%, 58% ou 71,78%), ICMS interno (19,5%) e CEST. O NCM sozinho não decide. Dentro do 39.17.3229, por exemplo, há itens com MVA 39%, com MVA 71,78% e sem ST.
 
