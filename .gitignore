@@ -1,0 +1,4 @@
+node_modules/
+tools/fontes/
+*.log
+.DS_Store
