@@ -1,5 +1,5 @@
 // Gerado por tools/build-sw.mjs — não editar à mão.
-const VERSAO = 'mantac-ac829928d6';
+const VERSAO = 'mantac-160fbeed7a';
 const ARQUIVOS = [
   "./",
   "css/app.css",

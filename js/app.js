@@ -46,6 +46,7 @@ const estado = {
   limite: 30,
   pend: {}, // quantidade escolhida no card antes de adicionar
   previa: null,
+  previaPedidos: null,
   vista: 'pedido',
 };
 let indice = [];
@@ -388,7 +389,10 @@ function renderOrcamento() {
     <div class="folha__barra">
       <div><h2 class="folha__titulo">Orçamento${o.numero ? ' nº ' + o.numero : ''}</h2>
       <span class="mudo">${linhas.length} ite${linhas.length === 1 ? 'm' : 'ns'}${o.cliente ? ' · ' + esc(o.cliente) : ''}</span></div>
-      <button class="btn-icone" data-acao="fechar" aria-label="Fechar">${ICONES.x}</button>
+      <div class="botoes-barra">
+        ${linhas.length ? `<button class="btn btn--perigo btn--mini" data-acao="limpar-orc">${ICONES.lixo} Limpar</button>` : ''}
+        <button class="btn-icone" data-acao="fechar" aria-label="Fechar">${ICONES.x}</button>
+      </div>
     </div>
     ${linhas.length ? '' : '<div class="vazio"><b>Nenhum item</b>Busque produtos e toque em + para adicionar.</div>'}
     ${linhas
@@ -441,6 +445,7 @@ function renderOrcamento() {
         <button class="btn" data-exportar="imagem">Imagem</button>
         <button class="btn" data-exportar="pdf">PDF</button>
       </div>
+      <button class="btn btn--perigo btn--bloco" style="margin-top:8px" data-acao="limpar-orc">${ICONES.lixo} Limpar orçamento</button>
       <div class="acoes acoes--2">
         <button class="btn btn--contorno" data-acao="salvar-orc">${o.id ? 'Salvar alterações' : 'Salvar no histórico'}</button>
         <button class="btn btn--contorno" data-acao="novo-orc">Novo orçamento</button>
@@ -738,10 +743,13 @@ function salvarCliente(form) {
 }
 
 // ---------- Histórico ----------
+const ehPedido = (h) => h.tipo === 'pedido';
+const dataHist = (h) => h.data || h.atualizadoEm || '';
+
 function itemHistorico(h) {
-  return `<div class="hist-item">
+  return `<div class="hist-item${ehPedido(h) ? ' hist-item--pedido' : ''}">
     <button class="item__abrir" data-ver-orc="${esc(h.id)}">
-      <span class="item__cod">Nº ${h.numero} · ${dataHora(h.atualizadoEm)}</span>
+      <span class="item__cod">${ehPedido(h) ? `Pedido oficial ${esc(h.numero)} · ${dataBR(h.data)}` : `Orçamento nº ${h.numero} · ${dataHora(h.atualizadoEm)}`}</span>
       <span class="item__desc">${esc(h.cliente || 'Sem cliente')}</span>
       <span class="item__meta">${h.itens.length} ite${h.itens.length === 1 ? 'm' : 'ns'} · ${esc(h.vendedor || '')}</span>
     </button>
@@ -752,18 +760,21 @@ function itemHistorico(h) {
 function renderHistorico() {
   const q = $('#busca-historico').value.trim();
   const t = norm(q);
-  const lista = estado.historico.filter((h) => !t || norm(`${h.cliente} ${h.numero}`).includes(t) || String(h.numero) === t);
+  const lista = estado.historico
+    .filter((h) => !t || norm(`${h.cliente} ${h.numero} ${h.clienteCodigo || ''}`).includes(t) || String(h.numero) === t)
+    .sort((a, b) => dataHist(b).localeCompare(dataHist(a)));
   $('#lista-historico').innerHTML = estado.historico.length
     ? lista.length
       ? lista.map(itemHistorico).join('')
       : `<div class="vazio"><b>Nada encontrado</b>Nenhum orçamento para “${esc(q)}”.</div>`
-    : `<div class="vazio"><b>Nenhum orçamento salvo</b>Os orçamentos compartilhados ou salvos aparecem aqui.</div>`;
+    : `<div class="vazio"><b>Nenhum orçamento salvo</b>Os orçamentos compartilhados ou salvos aparecem aqui. Pedidos oficiais podem ser importados no Painel.</div>`;
 }
 
 function verOrcamento(id) {
   const h = estado.historico.find((x) => x.id === id);
   if (!h) return;
   $('#folha').dataset.tipo = 'hist';
+  if (ehPedido(h)) return verPedidoOficial(h);
   abrirFolha(`
     <div class="folha__barra">
       <div><h2 class="folha__titulo">Orçamento nº ${h.numero}</h2><span class="mudo">${dataHora(h.atualizadoEm)} · ${esc(h.vendedor || '')}</span></div>
@@ -785,6 +796,39 @@ function verOrcamento(id) {
     <button class="btn btn--perigo btn--bloco" style="margin-top:8px" data-excluir-orc="${esc(h.id)}">${ICONES.lixo} Excluir do histórico</button>`);
 }
 
+function verPedidoOficial(h) {
+  const t = h.totais || {};
+  abrirFolha(`
+    <div class="folha__barra">
+      <div><h2 class="folha__titulo">Pedido oficial ${esc(h.numero)}</h2><span class="mudo">${dataBR(h.data)}${h.entrega ? ` · entrega ${dataBR(h.entrega)}` : ''}</span></div>
+      <button class="btn-icone" data-acao="fechar" aria-label="Fechar">${ICONES.x}</button>
+    </div>
+    <div class="cliente-card" style="margin-top:16px"><div class="cliente-card__info"><span class="rotulo">Cliente</span><b class="cliente-card__nome">${esc(h.cliente || '—')}</b><span class="mudo">${h.clienteCodigo ? `Cód. ${esc(h.clienteCodigo)} · ` : ''}${esc(formatarDoc(h.clienteDoc) || '')}</span></div></div>
+    <dl class="dados" style="margin-top:12px">
+      <div><dt>Pagamento</dt><dd>${esc(h.condicaoTexto || '—')}</dd></div>
+      <div><dt>Comissão</dt><dd>${h.comissao != null ? esc(String(h.comissao).replace('.', ',')) + '%' : '—'}</dd></div>
+      <div><dt>Peso</dt><dd>${t.peso != null ? numero(t.peso) + ' kg' : '—'}</dd></div>
+    </dl>
+    ${h.obs ? `<p class="aviso-oferta" style="margin-top:12px"><b>Obs.:</b> ${esc(h.obs)}</p>` : ''}
+    <table class="tabela-hist">
+      <thead><tr><th>Item</th><th>Qtd</th><th>Total</th></tr></thead>
+      <tbody>${h.retrato
+        .map((r) => `<tr><td><b>${esc(r.codigo)}</b> ${esc(r.descricao)}<br><span class="mudo">${brl(r.unit)}/${esc(r.um)} · IPI ${pct((r.ipi || 0) / 100)}${r.st ? ` · ST ${brl(r.st)}` : ''}${porCodigo.has(r.codigo) ? '' : ' · fora da tabela atual'}</span></td><td>${numero(r.qtd)} ${esc(r.um)}</td><td>${brl(r.total)}</td></tr>`)
+        .join('')}</tbody>
+      <tfoot>
+        <tr><td colspan="2" class="sub">Mercadorias</td><td class="sub">${brl(t.mercadoria)}</td></tr>
+        <tr><td colspan="2" class="sub">IPI</td><td class="sub">${brl(t.ipi)}</td></tr>
+        ${t.st ? `<tr><td colspan="2" class="sub">ICMS-ST</td><td class="sub">${brl(t.st)}</td></tr>` : ''}
+        <tr><td colspan="2">Total</td><td>${brl(h.total)}</td></tr>
+      </tfoot>
+    </table>
+    <p class="mudo" style="font-size:13px">Importado da cópia do pedido Mantac${h.arquivo ? ` (${esc(h.arquivo)})` : ''}. “Duplicar” abre um orçamento novo com os mesmos itens e quantidades, pelos preços atuais.</p>
+    <div class="acoes acoes--2" style="margin-top:16px">
+      <button class="btn" data-duplicar="${esc(h.id)}">Duplicar como orçamento</button>
+      <button class="btn btn--perigo" data-excluir-orc="${esc(h.id)}">${ICONES.lixo} Excluir</button>
+    </div>`);
+}
+
 async function carregarDoHistorico(id, duplicar) {
   const h = estado.historico.find((x) => x.id === id);
   if (!h) return;
@@ -800,8 +844,12 @@ async function carregarDoHistorico(id, duplicar) {
     clienteDoc: h.clienteDoc,
     vendedor: duplicar ? estado.cfg.vendedor : h.vendedor,
     faixaPadrao: h.faixaPadrao ?? 0,
-    condicao: h.condicao || (h.aVista ? 'avista' : '28dd'),
-    recolheSt: !!h.recolheSt,
+    condicao:
+      h.condicao ||
+      (h.aVista ? 'avista' : null) ||
+      condicoes().find((c) => h.condicaoTexto && norm(h.condicaoTexto).startsWith(norm(c.nome)))?.id ||
+      '28dd',
+    recolheSt: !!h.recolheSt || (ehPedido(h) && /RECOLHE\s+A\s+ST/i.test(h.obs || '')),
     clienteCodigo: h.clienteCodigo || '',
     itens,
   };
@@ -856,6 +904,31 @@ function renderPainel() {
         <b>${esc(pv.arquivo)}</b>
         <ul>${pv.linhas.map((l) => `<li>${esc(l)}</li>`).join('')}</ul>
         <div class="botoes"><button class="btn" data-acao="confirmar">Aplicar</button><button class="btn btn--contorno" data-acao="descartar">Cancelar</button></div>
+      </div>` : ''}
+    </div>
+
+    <div class="cartao">
+      <h3>Importar pedidos para o histórico</h3>
+      <p>Envie as <b>cópias de pedido oficial</b> (PDF do Prosyst, “Pedido N°”). Pode selecionar vários de uma vez. Cada pedido vai para o Histórico do cliente; cliente novo é cadastrado pelo CNPJ (código Mantac, IE, contato e cidade vêm do pedido).</p>
+      <label class="upload" id="upload-pedidos">
+        <input type="file" id="arquivo-pedidos" accept=".pdf,application/pdf" multiple>
+        <b class="rotulo" style="color:var(--azul)">Escolher pedidos (PDF)</b>
+        <span class="mudo" style="font-size:14px">${estado.historico.filter(ehPedido).length} pedidos oficiais no histórico</span>
+      </label>
+      ${estado.previaPedidos ? `<div class="previa" id="previa-pedidos">
+        ${estado.previaPedidos.lidos.length ? `<b>${estado.previaPedidos.lidos.length} pedido(s) lido(s)</b>
+        <ul>${estado.previaPedidos.lidos
+          .map((p) => {
+            const existe = estado.historico.some((h) => h.id === 'pedido-' + p.numero);
+            const cli = clientePorDoc(p.cnpj);
+            return `<li><b>${esc(p.numero)}</b> · ${dataBR(p.data)} · ${esc(p.cliente)} · ${p.itens.length} itens · ${brl(p.totais.total)}${cli ? '' : ' · <i>cliente novo</i>'}${existe ? ' · <i>substitui o já importado</i>' : ''}</li>`;
+          })
+          .join('')}</ul>` : ''}
+        ${estado.previaPedidos.erros.length ? `<p style="color:var(--erro)">Não lidos: ${estado.previaPedidos.erros.map(esc).join(' · ')}</p>` : ''}
+        <div class="botoes">
+          ${estado.previaPedidos.lidos.length ? '<button class="btn" data-acao="importar-pedidos">Importar para o histórico</button>' : ''}
+          <button class="btn btn--contorno" data-acao="descartar-pedidos">Cancelar</button>
+        </div>
       </div>` : ''}
     </div>
 
@@ -948,6 +1021,10 @@ async function lerArquivo(file) {
     let novo, extra = '';
     if (ext === 'pdf') {
       const r = await lerPdf(file);
+      if (r.tipo === 'pedido') {
+        estado.previaPedidos = { lidos: [{ ...r, arquivo: nome }], erros: [] };
+        return renderPainel();
+      }
       if (r.tipo === 'st') {
         const porCodigo = {};
         for (const p of r.produtos) porCodigo[p.codigo] = p.st ? { mva: p.mva, aliqInterna: p.aliqInterna, pst: p.pst, cest: p.cest } : null;
@@ -1017,6 +1094,88 @@ async function salvarOfertas(form) {
   await db.gravar('ofertas', estado.ofertas);
   renderPainel();
   aviso(`${Object.keys(precos).length} ofertas salvas`);
+}
+
+// ---------- Importar pedidos oficiais ----------
+async function lerPedidos(files) {
+  const { lerPdf } = await import('./importar.js');
+  const lidos = [];
+  const erros = [];
+  for (const f of files) {
+    try {
+      const r = await lerPdf(f);
+      if (r.tipo !== 'pedido') throw new Error('não é uma cópia de pedido');
+      lidos.push({ ...r, arquivo: f.name });
+    } catch (e) {
+      erros.push(`${f.name}: ${e.message}`);
+    }
+  }
+  estado.previaPedidos = { lidos, erros };
+  renderPainel();
+  if (lidos.length) $('#previa-pedidos')?.scrollIntoView({ block: 'center' });
+}
+
+function clientePorDoc(doc) {
+  const d = soDigitos(doc);
+  return d ? estado.clientes.find((c) => soDigitos(c.doc) === d) : null;
+}
+
+function importarPedidos() {
+  const { lidos } = estado.previaPedidos || { lidos: [] };
+  let novosClientes = 0;
+  for (const p of lidos) {
+    let c = clientePorDoc(p.cnpj) || (p.codigoCliente && estado.clientes.find((x) => x.codigoErp === p.codigoCliente));
+    const dadosCli = {
+      nome: p.cliente,
+      doc: p.cnpj,
+      codigoErp: p.codigoCliente,
+      ie: p.ie,
+      email: p.email,
+      telefone: p.telefone,
+      contato: p.contato,
+      cidade: p.cidade,
+    };
+    if (!c) {
+      c = { id: uid(), ...dadosCli, recolheSt: /RECOLHE\s+A\s+ST/i.test(p.obs || ''), criadoEm: new Date().toISOString() };
+      estado.clientes.push(c);
+      novosClientes++;
+    } else {
+      // Completa só o que estiver vazio; não sobrescreve o que foi digitado no app.
+      for (const [k, v] of Object.entries(dadosCli)) if (v && !c[k]) c[k] = v;
+      if (/RECOLHE\s+A\s+ST/i.test(p.obs || '')) c.recolheSt = true;
+    }
+    const id = 'pedido-' + p.numero;
+    const agora = new Date().toISOString();
+    const reg = {
+      id,
+      tipo: 'pedido',
+      numero: p.numero,
+      data: p.data,
+      entrega: p.entrega,
+      clienteId: c.id,
+      cliente: p.cliente,
+      clienteDoc: p.cnpj,
+      clienteCodigo: p.codigoCliente,
+      vendedor: p.representante,
+      comissao: p.comissao,
+      condicaoTexto: p.condicao,
+      obs: p.obs,
+      arquivo: p.arquivo,
+      itens: p.itens.map((i) => ({ codigo: i.codigo, qtd: i.qtd, k: 0 })),
+      retrato: p.itens.map((i) => ({ codigo: i.codigo, descricao: i.descricao, um: i.um, qtd: i.qtd, unit: i.unit, ipi: i.ipi, st: i.st, total: i.total, peso: i.peso, pm: i.pm })),
+      totais: p.totais,
+      total: p.totais.total ?? p.itens.reduce((s, i) => s + (i.total || 0), 0),
+      mercadoria: p.totais.mercadoria,
+      criadoEm: estado.historico.find((h) => h.id === id)?.criadoEm || agora,
+      atualizadoEm: agora,
+    };
+    estado.historico = [reg, ...estado.historico.filter((h) => h.id !== id)];
+  }
+  salvarClientes();
+  salvarHistorico();
+  estado.previaPedidos = null;
+  renderPainel();
+  aviso(`${lidos.length} pedido(s) no histórico${novosClientes ? ` · ${novosClientes} cliente(s) novo(s)` : ''}`);
 }
 
 function exportarBackup() {
@@ -1240,6 +1399,20 @@ function ligarEventos() {
         await db.apagar('ofertas');
         renderPainel();
         return aviso('Ofertas publicadas restauradas');
+      case 'importar-pedidos':
+        return importarPedidos();
+      case 'descartar-pedidos':
+        estado.previaPedidos = null;
+        return renderPainel();
+      case 'limpar-orc':
+        if (!(await confirmar('Tirar todos os itens deste orçamento?', 'Limpar', true))) return;
+        Object.assign(estado.orc, { id: null, numero: null, itens: [] });
+        estado.pend = {};
+        salvarOrc();
+        renderBarra();
+        fecharFolha();
+        if (estado.vista === 'pedido') renderResultados();
+        return aviso('Orçamento limpo');
       case 'exportar-backup':
         return exportarBackup();
     }
@@ -1271,6 +1444,7 @@ function ligarEventos() {
       renderOrcamento();
       return aviso(el.checked ? 'ST recolhida pelo cliente: não cobrada' : 'ST cobrada no orçamento');
     }
+    if (el.id === 'arquivo-pedidos' && el.files.length) return lerPedidos([...el.files]);
     if (el.id === 'arquivo' && el.files[0]) return lerArquivo(el.files[0]);
     if (el.id === 'arquivo-backup' && el.files[0]) return importarBackup(el.files[0]);
     const st = estado.cfg.st;
@@ -1301,18 +1475,19 @@ function ligarEventos() {
 
   // Arrastar arquivo no painel.
   document.addEventListener('dragover', (e) => {
-    const up = e.target.closest?.('#upload');
+    const up = e.target.closest?.('#upload, #upload-pedidos');
     if (up) {
       e.preventDefault();
       up.classList.add('arrastando');
     }
   });
-  document.addEventListener('dragleave', (e) => e.target.closest?.('#upload')?.classList.remove('arrastando'));
+  document.addEventListener('dragleave', (e) => e.target.closest?.('#upload, #upload-pedidos')?.classList.remove('arrastando'));
   document.addEventListener('drop', (e) => {
-    const up = e.target.closest?.('#upload');
+    const up = e.target.closest?.('#upload, #upload-pedidos');
     if (!up) return;
     e.preventDefault();
     up.classList.remove('arrastando');
+    if (up.id === 'upload-pedidos') return e.dataTransfer.files.length && lerPedidos([...e.dataTransfer.files]);
     if (e.dataTransfer.files[0]) lerArquivo(e.dataTransfer.files[0]);
   });
 

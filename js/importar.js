@@ -1,5 +1,5 @@
 // Leitura de arquivos enviados no painel (PDF da lista e planilha XLS/XLSX).
-import { parseTabelaPdf, parseTabelaXls, parseStPdf, pareceTabelaSt } from './parsers.js';
+import { parseTabelaPdf, parseTabelaXls, parseStPdf, pareceTabelaSt, parsePedidoPdf, parecePedido } from './parsers.js';
 
 let pdfjs;
 async function carregarPdfJs() {
@@ -31,9 +31,14 @@ async function paginasPdf(arquivo) {
   return paginas;
 }
 
-/** Lê um PDF e identifica se é a lista de preços ou a tabela de ICMS-ST. */
+/** Lê um PDF e identifica o tipo: lista de preços, tabela de ICMS-ST ou pedido oficial. */
 export async function lerPdf(arquivo) {
   const paginas = await paginasPdf(arquivo);
+  if (parecePedido(paginas)) {
+    const ped = parsePedidoPdf(paginas);
+    if (!ped.itens.length) throw new Error('Nenhum item reconhecido no pedido.');
+    return { tipo: 'pedido', ...ped };
+  }
   if (pareceTabelaSt(paginas)) {
     const st = parseStPdf(paginas);
     if (!st.produtos.length) throw new Error('Nenhum produto reconhecido na tabela de ST.');

@@ -212,3 +212,127 @@ export function pareceTabelaSt(paginas) {
   const cab = (paginas[0] || []).map((i) => i.str).join(' ');
   return /%ST/.test(cab) && /MVA/.test(cab) && !/Lista de Pre[çc]os/i.test(cab);
 }
+
+/** Diz se as páginas parecem um pedido do Prosyst ("Pedido N°"). */
+export function parecePedido(paginas) {
+  const txt0 = (paginas[0] || []).map((i) => i.str).join(' ');
+  return /Pedido N[°º]/i.test(txt0) && /Descri[çc][ãa]o do Produto/i.test(txt0);
+}
+
+/**
+ * Lê a cópia de um pedido oficial Mantac (Prosyst, "Pedido N°").
+ * Cabeçalho da 1ª página, itens de todas as páginas, totais da última.
+ */
+export function parsePedidoPdf(paginas) {
+  const itensDe = (pg) => pg.filter((i) => i.str && i.str.trim()).map((i) => ({ ...i, s: txt(i.str) }));
+  const p1 = itensDe(paginas[0] || []);
+  const achar = (pg, re, filtro = () => true) => pg.find((i) => re.test(i.s) && filtro(i));
+  // Valor à direita de um rótulo, na mesma linha (até o próximo rótulo "Xxx:").
+  const aDireita = (pg, rot, xMax = Infinity) => {
+    if (!rot) return '';
+    const mesma = pg.filter((i) => i !== rot && Math.abs(i.y - rot.y) < 3.2 && i.x > rot.x && i.x < xMax).sort((a, b) => a.x - b.x);
+    const out = [];
+    for (const i of mesma) {
+      if (/:\s*$/.test(i.s)) break;
+      out.push(i.s);
+    }
+    return out.join(' ').trim();
+  };
+  const abaixo = (pg, rot, alcance = 14, xMax = 420) =>
+    rot ? pg.filter((i) => i.y < rot.y - 2 && i.y > rot.y - alcance && i.x < xMax).sort((a, b) => b.y - a.y || a.x - b.x).map((i) => i.s).join(' ').trim() : '';
+  const numBR = (s) => (s ? Number(String(s).replace(/\./g, '').replace(',', '.')) : null);
+
+  const rotPedido = achar(p1, /^Pedido N[°º]/i);
+  const rotCliente = achar(p1, /^Cliente:$/, (i) => i.x < 40);
+  const yCliente = rotCliente?.y ?? 700;
+  const blocoCliente = (re, extra = () => true) => achar(p1, re, (i) => i.y <= yCliente + 3 && extra(i));
+
+  const faturamento = aDireita(p1, achar(p1, /^Faturamento:$/));
+  const cidade = (() => {
+    const m = /-\s*([^-]+?)\s*-\s*([A-Z]{2})\s*$/.exec(faturamento);
+    return m ? `${m[1].trim().toLowerCase().replace(/(^|\s)\S/g, (c) => c.toUpperCase())}/${m[2]}` : '';
+  })();
+  const dataCad = aDireita(p1, achar(p1, /^Data do cadastro:$/), 160);
+  const cab = {
+    numero: aDireita(p1, rotPedido).replace(/\D/g, ''),
+    data: dataIso(dataCad) || null,
+    cliente: aDireita(p1, rotCliente, 440),
+    codigoCliente: aDireita(p1, blocoCliente(/^C[óo]digo:$/)).replace(/\D/g, ''),
+    email: aDireita(p1, blocoCliente(/^E-mail:$/, (i) => i.x < 40)),
+    cnpj: aDireita(p1, blocoCliente(/^CNPJ:$/, (i) => i.x < 40), 190).replace(/\D/g, ''),
+    ie: aDireita(p1, blocoCliente(/^Inscri[çc][ãa]o Estadual:$/), 390),
+    telefone: aDireita(p1, blocoCliente(/^Fone:$/, (i) => i.x < 300), 390),
+    contato: aDireita(p1, blocoCliente(/^Contato:$/)),
+    representante: aDireita(p1, achar(p1, /^Representante:$/), 390),
+    comissao: numBR(aDireita(p1, achar(p1, /^Comiss[ãa]o:$/))),
+    transportadora: aDireita(p1, achar(p1, /^Transportadora:$/), 390),
+    cfop: aDireita(p1, achar(p1, /^CFOP:$/)),
+    endereco: faturamento,
+    cidade,
+  };
+
+  // Itens: linhas com quantidade na 1ª coluna; colunas pelas posições do cabeçalho.
+  const itens = [];
+  let pgTotais = p1;
+  for (const pg0 of paginas) {
+    const pg = itensDe(pg0);
+    const cabItens = achar(pg, /^Quantid\.?$/);
+    if (!cabItens) continue;
+    if (achar(pg, /^Sub-total:$/)) pgTotais = pg;
+    const fim = achar(pg, /^Sub-total:$/)?.y ?? achar(pg, /^Peso Total:$/)?.y ?? -Infinity;
+    const corpo = pg.filter((i) => i.y < cabItens.y - 8 && i.y > fim + 3);
+    const ancoras = corpo.filter((i) => i.x < 58 && /^[\d.]+,\d{2,3}$/.test(i.s)).sort((a, b) => b.y - a.y);
+    for (const a of ancoras) {
+      const linha = corpo.filter((i) => Math.abs(i.y - a.y) < 3.2);
+      const col = (x0, x1) => linha.filter((i) => i.x >= x0 && i.x < x1).sort((u, v) => u.x - v.x).map((i) => i.s).join(' ').trim();
+      itens.push({
+        y: a.y,
+        qtd: numBR(a.s),
+        um: col(55, 82).toLowerCase(),
+        peso: numBR(col(82, 120)),
+        codigo: col(120, 165),
+        descricao: col(165, 368),
+        pm: numBR(col(368, 400)),
+        ipi: numBR(col(400, 425)),
+        unit: numBR(col(425, 470)),
+        st: numBR(col(470, 512)),
+        total: numBR(col(512, 700)),
+      });
+    }
+    // Continuação da descrição (linha abaixo, só na coluna de descrição).
+    for (const i of corpo.filter((i) => i.x >= 165 && i.x < 368)) {
+      if (ancoras.some((a) => Math.abs(a.y - i.y) < 3.2)) continue;
+      const dono = itens.filter((it) => it.y > i.y && it.y - i.y < 13).sort((u, v) => u.y - v.y)[0];
+      if (dono) dono.descricao = `${dono.descricao} ${i.s}`.trim();
+    }
+  }
+  itens.forEach((i) => delete i.y);
+
+  const valorTotal = (re) => {
+    const r = achar(pgTotais, re);
+    if (!r) return null;
+    const v = pgTotais.filter((i) => Math.abs(i.y - r.y) < 3.2 && i.x > r.x && /^[\d.]+,\d{2}$/.test(i.s)).sort((a, b) => b.x - a.x)[0];
+    return v ? numBR(v.s) : null;
+  };
+  const condicao = abaixo(pgTotais, achar(pgTotais, /^Condi[çc][õo]es de Pagamento:$/)).replace(/^PAGAMENTO:\s*/i, '');
+  const obsRot = achar(pgTotais, /^Observa[çc][õo]es:$/);
+  const obs = obsRot ? pgTotais.filter((i) => i.y < obsRot.y - 2 && i.y > obsRot.y - 40 && i.x < 400 && !/TOTAL|R\$/.test(i.s)).sort((a, b) => b.y - a.y).map((i) => i.s).join(' ').trim() : '';
+  const pesoTxt = aDireita(pgTotais, achar(pgTotais, /^Peso Total:$/));
+  const entregaRot = achar(pgTotais, /^Entrega:$/, (i) => i.x > 100);
+  return {
+    ...cab,
+    condicao,
+    obs,
+    entrega: dataIso(aDireita(pgTotais, entregaRot, 400)) || null,
+    itens,
+    totais: {
+      mercadoria: valorTotal(/^Sub-total:$/),
+      ipi: valorTotal(/^IPI:$/),
+      st: valorTotal(/^Subst\. Trib\.:$/),
+      frete: valorTotal(/^Frete\/Seguro:$/),
+      desconto: valorTotal(/^Desconto:$/),
+      total: valorTotal(/^TOTAL$/),
+      peso: numBR(pesoTxt.replace(/\s*kg$/i, '')),
+    },
+  };
+}
