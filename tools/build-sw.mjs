@@ -5,15 +5,16 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { execSync } from 'node:child_process';
 
 const raiz = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
 const pastas = ['css', 'js', 'data', 'fonts', 'icons', 'img', 'vendor'];
 const soltos = ['index.html', 'manifest.webmanifest'];
 
-const listar = (dir) =>
-  fs.readdirSync(path.join(raiz, dir), { withFileTypes: true }).flatMap((e) =>
-    e.isDirectory() ? listar(path.join(dir, e.name)) : [path.join(dir, e.name)]);
-const arquivos = [...soltos, ...pastas.flatMap(listar)]
+// Só arquivos versionados (os ignorados, como os dados de preço, não são publicados).
+const versionados = execSync('git ls-files', { cwd: raiz, encoding: 'utf8' }).split('\n').filter(Boolean);
+const arquivos = versionados
+  .filter((f) => soltos.includes(f) || pastas.some((p) => f.startsWith(p + '/')))
   .filter((f) => !/\.(map|md)$/.test(f))
   .map((f) => f.split(path.sep).join('/'))
   .sort();

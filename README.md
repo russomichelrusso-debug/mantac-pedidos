@@ -1,6 +1,30 @@
 # Mantac Pedidos
 
-PWA para consulta de preços da **Tabela 44 (Atacado Especial)**, catálogo técnico e montagem de orçamentos para clientes do Paraná. Roda 100% no navegador (sem servidor), é instalável e funciona offline depois do primeiro acesso.
+PWA para consulta de preços da **Tabela 44 (Atacado Especial)**, catálogo técnico e montagem de orçamentos para clientes do Paraná. Tem login com Google, e os dados ficam num servidor compartilhado entre os aparelhos. O app continua funcionando offline com a última cópia baixada.
+
+## Arquitetura
+
+| Parte | Onde |
+|---|---|
+| App (PWA) | GitHub Pages, servido direto da `main` |
+| API | Supabase Edge Function `api` (`supabase/functions/api/index.ts`), projeto **mantac** (`bqzrzpbpactbxmkhyjle`, sa-east-1) |
+| Banco | Postgres do mesmo projeto (`supabase/migrations/`) |
+
+- **Login Google**:
+  - Usa o mesmo Client ID do app de vendas, que está na mesma origem `russomichelrusso-debug.github.io`.
+  - A API confere o ID token no Google e devolve um token de sessão opaco, válido por 90 dias e guardado no banco só como hash.
+  - A primeira conta que entra vira administradora. As demais precisam ser cadastradas no Painel › Usuários.
+- **Banco**:
+  - Tabelas `usuarios`, `sessoes`, `clientes`, `historico` (orçamentos e pedidos oficiais) e `dados` (conjuntos compartilhados `tabela44`, `st`, `ofertas` e `config`).
+  - RLS ligado sem políticas: só a Edge Function (service role) acessa.
+- **Sincronização**:
+  - O app baixa as alterações (`GET /sync?desde=`) ao abrir, a cada 60 s, ao voltar a ficar online e pelo botão "Sincronizar agora".
+  - Mudanças locais vão para uma fila no aparelho (IndexedDB) e são enviadas assim que houver conexão. A exclusão é lógica, para se propagar entre os aparelhos.
+  - Na primeira sincronização de um aparelho, o que só existia nele é enviado ao servidor.
+- **Numeração de orçamentos**:
+  - Sequência única no servidor.
+  - Sem conexão, o app usa um número provisório `L…`.
+- **Dados públicos no GitHub**: os preços (`data/tabela44.json`, `st-pr.json`, `ofertas.json`) **não são mais publicados**; ficam no servidor e só aparecem após o login. Continuam públicos só o catálogo técnico (`data/catalogo.json`, `img/cat/`) e o app.
 
 ## Funções
 
@@ -31,7 +55,7 @@ O uso segue o modelo do app de vendas da Cortag (appdb), sem levantamento de est
   - define o vendedor;
   - faz **backup** (exportar e importar JSON) de clientes, histórico e configurações.
 
-Tudo fica salvo **só no aparelho** (IndexedDB), sem servidor. Para passar os dados para outro aparelho, use o backup.
+Clientes, histórico, tabela, ST, ofertas e configurações ficam **no servidor** e aparecem em todos os aparelhos. O backup (JSON) continua disponível no Painel.
 
 ## Cálculo
 
@@ -74,18 +98,21 @@ comissão   = mercadoria × % da faixa (8% · 8% · 8% · 5%)
 - **Produtos fora da tabela de ST**: 66 produtos da Tabela 44 não aparecem na tabela de ST e ficam sem ST. Se algum deles tiver ST, dá para informar a MVA por NCM no Painel; essa regra vale só para esses produtos.
 - **Atualização**: a tabela de ST pode ser trocada pelo Painel, enviando o PDF novo. O app reconhece sozinho se o PDF é a lista de preços ou a tabela de ST.
 
-## Atualizar os dados publicados
+## Atualizar os dados
 
-Os arquivos originais ficam em `tools/fontes/`, que **não é versionado**, porque o PDF traz o custo de compra.
+O caminho normal é o Painel do app: importar o PDF ou XLS da tabela, o PDF de ST ou editar as ofertas. A alteração vai para o servidor e vale para todos os usuários.
+
+Scripts para gerar os dados a partir dos arquivos originais (em `tools/fontes/`, fora do Git):
 
 ```bash
 npm install
-npm run dados       # tools/fontes/tabela44.pdf + tabela44.xls (+ st-pr.pdf) -> data/tabela44.json (+ data/st-pr.json)
-npm run catalogo    # tools/fontes/catalogo2025.pdf             -> data/catalogo.json + img/cat/  (pip install pymupdf)
+npm run dados       # tabela44.pdf + tabela44.xls (+ st-pr.pdf) -> data/*.json (locais, não versionados)
+npm run catalogo    # catalogo2025.pdf -> data/catalogo.json + img/cat/  (pip install pymupdf)
 npm run sw          # regenera sw.js (lista offline + versão) — rode sempre antes de publicar
+node tools/analisar-pedido.mjs pedido.pdf   # confere um pedido oficial contra o cálculo do app
 ```
 
-No aparelho, uma importação feita pelo Painel substitui a tabela publicada só naquele aparelho, até que o usuário escolha "Voltar à versão publicada".
+A Edge Function é publicada no projeto Supabase **mantac** (função `api`, com `verify_jwt` desligado, porque a autenticação é própria).
 
 ## Publicação (GitHub Pages)
 
