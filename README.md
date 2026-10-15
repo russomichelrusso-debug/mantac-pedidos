@@ -69,7 +69,7 @@ comissão   = mercadoria × % da faixa (8% · 8% · 8% · 5%)
 ```
 
 **Ofertas** (`data/ofertas.json`, editável no Painel):
-- Enquanto a campanha estiver valendo, o preço da oferta substitui o de tabela. O "Setembro de Ofertas" vai até 30/09/26 e tem 179 produtos.
+- Enquanto a campanha estiver valendo, o preço da oferta substitui o de tabela. O "Outubro de Ofertas" vale de 06/10 a 20/10/26 e tem 178 produtos.
 - As faixas −10%, 2×10 e 3×10 incidem sobre o preço da oferta, e a comissão é a da oferta (8%).
 - A oferta só vale quando for menor que o preço de tabela.
 - Terminada a validade, os preços de tabela voltam sozinhos.
