@@ -68,11 +68,12 @@ export function ofertaVigente(ofertas, hoje = new Date().toISOString().slice(0, 
 
 /**
  * Preço de oferta do produto, se a oferta passada em cfg.ofertas (já vigente) o
- * incluir e for menor que o preço de tabela (oferta nunca encarece o item).
+ * incluir. Vale mesmo quando não é menor que o preço de tabela: o preço do
+ * folheto da campanha é o que a Mantac pratica.
  */
 export function precoOferta(prod, cfg) {
   const v = cfg?.ofertas?.precos?.[prod.codigo];
-  return v != null && v > 0 && v < prod.preco ? v : null;
+  return v != null && v > 0 ? v : null;
 }
 
 /** Calcula um item do orçamento (ou uma simulação de 1 embalagem). */
