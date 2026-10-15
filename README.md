@@ -71,7 +71,7 @@ comissão   = mercadoria × % da faixa (8% · 8% · 8% · 5%)
 **Ofertas** (`data/ofertas.json`, editável no Painel):
 - Enquanto a campanha estiver valendo, o preço da oferta substitui o de tabela. O "Outubro de Ofertas" vale de 06/10 a 20/10/26 e tem 178 produtos.
 - As faixas −10%, 2×10 e 3×10 incidem sobre o preço da oferta, e a comissão é a da oferta (8%).
-- A oferta só vale quando for menor que o preço de tabela.
+- O preço da oferta vale mesmo quando não é menor que o de tabela (no Outubro, o 9726 sai a R$ 6,50 na oferta e R$ 6,30 na tabela).
 - Terminada a validade, os preços de tabela voltam sozinhos.
 - No Pedido, o botão amarelo lista só os produtos em oferta.
 
